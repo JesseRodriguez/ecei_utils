@@ -29,32 +29,75 @@ c = 299792458
 
 def Fetch_ECEI_d3d(channel_path, shot_number, c = None):
     """
-    Basic fetch ecei data function, to be fed to Machine object.
+    Basic fetch ecei data function.
 
     Args:
-        channel_path: str, path to save .txt file (channel folder)
+        channel_path: str, path to save .txt file (channel folder, format LFSxxxx)
         shot_number: int, DIII-D shot number
         c: MDSplus.Connection object. None by default
     """
     channel = channel_path
     shot = str(shot_number)
+    mds_fail_pd = False
+    mds_fail_pd2 = False
+    mds_fail_p = False
+    mds_fail_t = False
 
+    #ptdata2 method (seems to be most reliable)
     try:
-        found = False
-        x = c.get('dim_of(_s = ptdata2('+channel+','+shot+'))')
-        y = c.get('_s = ptdata2('+channel+','+shot+')')
-        if x.shape[0] > 0:
-            found = True
-            print('Data exists for shot #:', shot)
-
+        x_pd2 = c.get('dim_of(_s = ptdata2('+channel+','+shot+'))')
+        y_pd2 = c.get('_s = ptdata2('+channel+','+shot+')')
     except Exception as e:
         print(e)
-        return None, None, None, False
+        mds_fail_pd2 = True
+        pass
+    if not mds_fail_pd2:
+        if x_pd2.shape[0] > 1:
+            print('Data exists for shot '+shot+' in channel '+channel[-5:-1]+'.')
+            return x_pd2, y_pd2, None, True
+    
+    #psuedo method
+    try:
+        x_p = c.get('dim_of(_s = psuedo('+channel+','+shot+'))')
+        y_p = c.get('_s = psuedo('+channel+','+shot+')')
+    except Exception as e:
+        print(e)
+        mds_fail_p = True
+        pass
+    if not mds_fail_p:
+        if x_p.shape[0] > 1:
+            print('Data exists for shot '+shot+' in channel '+channel[-5:-1]+'.')
+            return x_p, y_p, None, True
+            
+    #ptdata method
+    try:
+        x_pd = c.get('dim_of(_s = ptdata('+channel+','+shot+'))')
+        y_pd = c.get('_s = ptdata('+channel+','+shot+')')
+    except Exception as e:
+        print(e)
+        mds_fail_pd = True
+        pass
+    if not mds_fail_pd:
+        if x_pd.shape[0] > 1:
+            print('Data exists for shot '+shot+' in channel '+channel[-5:-1]+'.')
+            return x_pd, y_pd, None, True
 
-    if found:
-        return x, y, None, True
-    else:
-        return None, None, None, False
+    #tree method
+    try:
+        c.openTree(channel, shot)
+        x_t = c.get('dim_of(_s = '+shot+')').data()
+        y_t = c.get('_s = '+shot).data()
+    except Exception as e:
+        print(e)
+        mds_fail_t = True
+        pass
+    if not mds_fail_t:
+        if x_t.shape[0] > 1:
+            print('Data exists for shot '+shot+' in channel '+channel[-5:-1]+'.')
+            return x_t, y_t, None, True
+
+    print('Data DOES NOT exist for shot '+shot+' in channel '+channel[-5:-1]+'.')
+    return None, None, None, False
 
 
 def Download_Shot(shot_num_queue, c, channel_paths, sentinel = -1):
@@ -90,7 +133,6 @@ def Download_Shot(shot_num_queue, c, channel_paths, sentinel = -1):
 
             if not success:
                 try:
-
                     try:
                         time, data, mapping, success = Fetch_ECEI_d3d(\
                                                 channel_path[-9:], shot_num, c)
@@ -100,15 +142,16 @@ def Download_Shot(shot_num_queue, c, channel_paths, sentinel = -1):
                     except Exception as e:
                         print(e)
                         sys.stdout.flush()
-                        print('Channel {}, shot {} missing.'.format(\
-                               channel_path[-5:-1], shot_num))
+                        print('Channel {}, shot {} missing, all mds commands \
+                               failed.'.format(channel_path[-5:-1], shot_num))
                         success = False
 
                     if success:
                         data_two_column = np.vstack((time, data)).transpose()
                         np.savetxt(save_path, data_two_column, fmt='%.5e')
                     else:
-                        np.savetxt(save_path, np.array([-1.0]), fmt='%.5e')
+                        np.savetxt(save_path[0:-5]+'_missing.txt',\
+                                   np.array([-1.0]), fmt='%.5e')
                     print('.', end='')
 
                 except BaseException:
@@ -126,7 +169,8 @@ def Download_Shot(shot_num_queue, c, channel_paths, sentinel = -1):
     return
                          
 
-def Download_Shot_List(shot_numbers, channel_paths, max_cores = 8, server = 'atlas.gat.com'):
+def Download_Shot_List(shot_numbers, channel_paths, max_cores = 8,\
+                       server = 'atlas.gat.com'):
     """
     Accepts list of shots and downloads them in parallel
 
@@ -155,6 +199,31 @@ def Download_Shot_List(shot_numbers, channel_paths, max_cores = 8, server = 'atl
         p.start()
     for p in processes:
         p.join()
+
+
+def Count_Missing(shot_list, channel_paths, missing_path):
+    """
+    Accepts a list of all channel paths and produces an up-to-date list of all
+    missing data and places it in missing_path
+
+    Args:
+        shot_list: 1-D numpy array of DIII-D shot numbers
+        channel_paths: list of channel paths
+        missing_path: folder for missing shot reports
+    """
+    min_shot = np.argmin(shot_list)
+    max_shot = np.argmax(shot_list)
+    report = open(missing_path+'/missing_report_'+str(shot_list[min_shot])+'-'+\
+                  str(shot_list[max_shot])+'.txt', mode = 'w',\
+                  encoding='utf-8')
+    report.write('Missing channel signals for download from shot {} to shot {}:\n'.\
+                  format(shot_list[min_shot], shot_list[max_shot]))
+    for channel_path in channel_paths:
+        for filename in os.listdir(channel_path):
+            if filename.startswith('missing'):
+                report.write('Channel '+channel_path[-5:-1]+', shot #'+filename[8:-4])
+
+    report.close()
 
 
 ###############################################################################
@@ -200,11 +269,10 @@ class ECEI:
     def Acquire_Shots_D3D(self, shot_numbers, save_path = os.getcwd(), max_cores = 8):
         """
         Accepts a list of shot numbers and downloads the data, saving them into
-        folders corresponding to the individual channels. Returns boolean 
-        indicating success.
+        folders corresponding to the individual channels. Returns nothing.
 
         Args:
-            shot_numbers: list of integers, DIII-D shot numbers
+            shot_numbers: 1-D numpy array of integers, DIII-D shot numbers
             save_path: location where the channel folders will be stored,
                        current directory by default
             max_cores: int, max # of cores to carry out download tasks
@@ -216,6 +284,10 @@ class ECEI:
             channel_paths.append(channel_path)
             if not os.path.exists(channel_path):
                 os.mkdir(channel_path)
+        #Missing shots directory
+        missing_path = os.path.join(save_path, 'missing_shot_info')
+        if not os.path.exists(missing_path):
+            os.mkdir(missing_path)
 
         try:
             c = MDS.Connection('atlas.gat.com')
@@ -226,4 +298,60 @@ class ECEI:
         Download_Shot_List(shot_numbers, channel_paths, max_cores = max_cores,\
                            server = 'atlas.gat.com')
 
-        return True
+        Count_Missing(shot_numbers, channel_paths, missing_path)
+
+        return
+
+
+    def Aqcuire_Shot_Sequence_D3D(self, shots, shot_1, clear_file, disrupt_file,\
+                                  save_path = os.getcwd(), max_cores = 8):
+        """
+        Accepts a desired number of non-disruptive shots, then downloads all
+        shots in our labelled database up to the last non-disruptive shot.
+        Returns nothing.
+
+        Args:
+            shots: int, number of non-disruptive shots you want to download
+            shot_1: int, the shot number you want to start with
+            clear_file: The path to the clear shot list
+            disrupt_file: The path to the disruptive shot list
+            save_path: location where the channel folders will be stored,
+                       current directory by default
+            max_cores: int, max # of cores to carry out download tasks
+        """
+        clear_shots = np.loadtxt(clear_file)
+        disrupt_shots = np.loadtxt(disrupt_file)
+
+        first_c = False
+        first_d = False
+        i = 0
+        while not first_c:
+            if clear_shots[i,0] >= shot_1:
+                start_c = i
+                first_c = True
+            i += 1
+        i = 0
+        while not first_d:
+            if disrupt_shots[i,0] >= shot_1:
+                start_d = i
+                first_d = True
+            i += 1
+
+        shot_list = np.array([clear_shots[start,0]])
+        for i in range(shots):
+            shot_list = np.append(shot_list, [clear_shots[i+start,0]])
+
+        last = False
+        i = start_d
+        while not last:
+            if disrupt_shots[i,0] <= clear_shots[start_c+shots-1,0]:
+                end_d = i
+                last = True
+            i += 1
+
+        for i in range(end_d - start_d + 1):
+            shot_list = np.append(shot_list, [disrupt_shots[i+start_d,0]])
+
+        self.Acquire_Shots_D3D(shot_list, save_path, max_cores)
+
+        return

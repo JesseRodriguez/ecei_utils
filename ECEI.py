@@ -217,18 +217,23 @@ def Count_Missing(shot_list, channel_paths, missing_path):
     """
     min_shot = np.argmin(shot_list)
     max_shot = np.argmax(shot_list)
+    num_shots = np.shape(shot_list)[0]*160
+    num_shots_miss = 0
     report = open(missing_path+'/missing_report_'+str(int(shot_list[min_shot]))+'-'+\
                   str(int(shot_list[max_shot]))+'.txt', mode = 'w',\
                   encoding='utf-8')
     report.write('Missing channel signals for download from shot {} to shot {}:\n'.\
-                  format(shot_list[min_shot], shot_list[max_shot]))
+                  format(int(shot_list[min_shot]), int(shot_list[max_shot])))
     for channel_path in channel_paths:
         for filename in os.listdir(channel_path):
             if filename.startswith('missing'):
                 report.write('Channel '+channel_path[-5:-1]+', shot #'+filename[8:-4]+'\n')
                 signal = os.path.join(channel_path, filename)
                 os.remove(signal)
+                num_shots_miss +=1
 
+    report.write('Missing channel signals for {} out of {} signals.'.\
+                  format(num_shots_miss, num_shots))
     report.close()
 
 
@@ -352,15 +357,20 @@ class ECEI:
             shot_list = np.append(shot_list, [clear_shots[i+start_c+1,0]])
 
         last = False
+        no_disrupt = False
         i = start_d
         while not last:
             if disrupt_shots[i,0] <= clear_shots[start_c+shots-1,0]:
                 end_d = i
                 last = True
             i += 1
+            if i >= disrupt_shots.shape[0]:
+                no_disrupt = True
+                last = True
 
-        for i in range(end_d - start_d + 1):
-            shot_list = np.append(shot_list, [disrupt_shots[i+start_d,0]])
+        if not no_disrupt:
+            for i in range(end_d - start_d + 1):
+                shot_list = np.append(shot_list, [disrupt_shots[i+start_d,0]])
 
         self.Acquire_Shots_D3D(shot_list, save_path, max_cores, verbose)
 

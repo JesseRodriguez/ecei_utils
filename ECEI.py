@@ -376,6 +376,75 @@ class ECEI:
 
         return
 
+
+    def Generate_Missing_Report(self, shots, shot_1, clear_file, disrupt_file,\
+                                save_path = os.getcwd()):
+        """
+        Accept a start shot and a number of clear shots and generate a missing
+        shot report for all shots in that range.
+
+        Args:
+            shots: int, number of non-disruptive shots you want to download
+            shot_1: int, the shot number you want to start with
+            clear_file: The path to the clear shot list
+            disrupt_file: The path to the disruptive shot list
+            save_path: location where the channel folders will be stored,
+                       current directory by default
+        """
+        clear_shots = np.loadtxt(clear_file)
+        disrupt_shots = np.loadtxt(disrupt_file)
+
+        first_c = False
+        first_d = False
+        i = 0
+        while not first_c:
+            if clear_shots[i,0] >= shot_1:
+                start_c = i
+                first_c = True
+            i += 1
+        i = 0
+        while not first_d:
+            if disrupt_shots[i,0] >= shot_1:
+                start_d = i
+                first_d = True
+            i += 1
+
+        shot_list = np.array([clear_shots[start_c,0]])
+        for i in range(shots-1):
+            shot_list = np.append(shot_list, [clear_shots[i+start_c+1,0]])
+
+        last = False
+        no_disrupt = False
+        i = start_d
+        while not last:
+            if disrupt_shots[i,0] <= clear_shots[start_c+shots-1,0]:
+                end_d = i
+                last = True
+            i += 1
+            if i >= disrupt_shots.shape[0]:
+                no_disrupt = True
+                last = True
+
+        if not no_disrupt:
+            for i in range(end_d - start_d + 1):
+                shot_list = np.append(shot_list, [disrupt_shots[i+start_d,0]])
+            
+        channel_paths = []
+        for i in range(len(self.ecei_channels)):
+            channel_path = os.path.join(save_path, self.ecei_channels[i])
+            channel_paths.append(channel_path)
+            if not os.path.exists(channel_path):
+                os.mkdir(channel_path)
+        #Missing shots directory
+        missing_path = os.path.join(save_path, 'missing_shot_info')
+        if not os.path.exists(missing_path):
+            os.mkdir(missing_path)
+
+        Count_Missing(shot_list, channel_paths, missing_path)
+
+        return
+
+
     def Clean_Channel_Dirs(self, save_path = os.getcwd()):
         """
         Removes all signal files in the channel directories. If the directories

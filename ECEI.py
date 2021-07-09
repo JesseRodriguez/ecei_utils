@@ -376,7 +376,10 @@ class ECEI:
             if not os.path.exists(channel_path):
                 os.mkdir(channel_path)
 
-        for channel_path in channel_paths:
-            for signal_file in os.listdir(channel_path):
-                signal = os.path.join(channel_path, signal_file)
-                os.remove(signal)
+        check = input("WARNING: this function will delete ALL signal files in the "+\
+                "designated save path. Type 'yes' to continue, anything else to cancel.\n")
+        if check == 'yes':
+            for channel_path in channel_paths:
+                for signal_file in os.listdir(channel_path):
+                    signal = os.path.join(channel_path, signal_file)
+                    os.remove(signal)

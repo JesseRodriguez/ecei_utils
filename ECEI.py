@@ -226,6 +226,8 @@ def Count_Missing(shot_list, channel_paths, missing_path):
         for filename in os.listdir(channel_path):
             if filename.startswith('missing'):
                 report.write('Channel '+channel_path[-5:-1]+', shot #'+filename[8:-4]+'\n')
+                signal = os.path.join(channel_path, filename)
+                os.remove(signal)
 
     report.close()
 

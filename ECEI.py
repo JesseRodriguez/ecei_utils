@@ -285,17 +285,6 @@ class ECEI:
     ###########################################################################
     ## Data Processing
     ###########################################################################
-    def Proc(self):
-        """
-        Processing function
-
-        Args:
-        """
-        return 0
-
-    ###########################################################################
-    ## Visualization
-    ###########################################################################
     def Viz(self):
         """
         Visualization function
@@ -303,6 +292,46 @@ class ECEI:
         Args:
         """
         return 0
+
+
+    ###########################################################################
+    ## Visualization
+    ###########################################################################
+    def Generate_Txt(self, shot, channel, save_dir = os.getcwd()):
+        """
+        Get a .txt file out for reading signal data
+
+        Args:
+            shot: int, shot number
+            channel: str, format "XXYY", 03<=XX<=22, 01<=YY<=08, designates
+                     channel
+            save_dir: str, directory where shot files are stored
+        """
+        shot_s = str(shot)
+        for filename in os.listdir(save_dir):
+            if filename.startswith(shot_s):
+                f = hdf5.File(save_dir+'/'+filename, 'r')
+                data = f.get('"LFS'+channel+'"')
+                np.savetxt(save_dir+'/'+shot_s+'_chan'+channel+'.txt', data)
+
+        return
+
+    
+    def Generate_Txt_Interactive(self, save_dir = os.getcwd()):
+        """
+        Get a .txt file out for reading signal data, accepts input from command
+        line.
+
+        Args:
+            save_dir: str, directory where shot files are stored
+        """
+        shot = int(input("Which shot? Enter an integer.\n"))
+        channel = input("Which channel? format 'XXYY', 03<=XX<=22, 01<=YY<=08.\n")
+
+        self.Generate_Txt(shot, channel, save_dir)
+
+        return
+
 
     ###########################################################################
     ## Data Acquisition

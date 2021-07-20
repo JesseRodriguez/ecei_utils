@@ -167,6 +167,10 @@ def Download_Shot(shot_num_queue, c, channel_paths, sentinel = -1,\
                                 data_two_column = scipy.signal.decimate(data_two_column,\
                                                   10, axis = 0)
                         f = h5py.File(save_path, 'r+')
+                        for key in f.keys():
+                            if key.startswith('missing'):
+                                if key[8:] == channel:
+                                    del f[key]
                         dset = f.create_dataset(channel, data = data_two_column)
                         f.close()
                     else:
@@ -233,32 +237,41 @@ def Download_Shot_List(shot_numbers, channel_paths, max_cores = 8,\
         p.join()
 
 
-def Count_Missing(shot_list, channel_paths, missing_path):
+def Count_Missing(shot_list, shot_path, missing_path):
     """
     Accepts a list of all channel paths and produces an up-to-date list of all
     missing data and places it in missing_path
 
     Args:
         shot_list: 1-D numpy array of DIII-D shot numbers
-        channel_paths: list of channel paths
+        shot_path: path to folder containing shot files
         missing_path: folder for missing shot reports
     """
     min_shot = np.argmin(shot_list)
     max_shot = np.argmax(shot_list)
     num_shots = np.shape(shot_list)[0]*160
     num_shots_miss = 0
+    print("Generating report for {} shots between shots {} and {}".format(\
+           np.shape(shot_list)[0], int(shot_list[min_shot]),\
+           int(shot_list[max_shot])))
     report = open(missing_path+'/missing_report_'+str(int(shot_list[min_shot]))+'-'+\
                   str(int(shot_list[max_shot]))+'.txt', mode = 'w',\
                   encoding='utf-8')
     report.write('Missing channel signals for download from shot {} to shot {}:\n'.\
                   format(int(shot_list[min_shot]), int(shot_list[max_shot])))
-    for filename in os.listdir(missing_path):
-        if not filename.startswith('missing'):
-            f = hdf5.File(missing_path+'/'+filename, 'r')
-            for key in f.keys():
-                if key.startswith('missing'):
-                    report.write('Channel '+key[-5:-1]+', shot #'+filename[8:-4]+'\n')
-                    num_shots_miss +=1
+    for filename in os.listdir(shot_path):
+        if filename.endswith('hdf5'):
+            if int(filename[:-5]) >= shot_list[min_shot] and int(filename[:-5]) <=\
+                                                             shot_list[max_shot]:
+                f = h5py.File(shot_path+'/'+filename, 'r')
+                count = 0
+                for key in f.keys():
+                    if key.startswith('missing'):
+                        count += 1
+                        report.write('Channel '+key[-5:-1]+', shot #'+filename[:-5]+'\n')
+                        num_shots_miss +=1
+                if count > 160:
+                    print('Shot #'+filename[:-5]+' has more than 160 channels missing!')
 
     report.write('Missing channel signals for {} out of {} signals.'.\
                   format(num_shots_miss, num_shots))
@@ -376,7 +389,7 @@ class ECEI:
                            server = 'atlas.gat.com', verbose = verbose,\
                            d_sample = d_sample)
 
-        missed = Count_Missing(shot_numbers, channel_paths, missing_path)
+        missed = Count_Missing(shot_numbers, save_path, missing_path)
 
         t_e = time.time()
         T = t_e-t_b
@@ -394,7 +407,10 @@ class ECEI:
         """
         Accepts a desired number of non-disruptive shots, then downloads all
         shots in our labelled database up to the last non-disruptive shot.
-        Returns nothing.
+        Returns nothing. Shots are saved in hdf5 format, downsampling is done
+        BEFORE saving. Each channel is labelled within its own dataset in the
+        hdf5 file, where the label is the channel name/MDS point name, e.g.
+        '"LFSXXYY"'.
 
         Args:
             shots: int, number of non-disruptive shots you want to download
@@ -427,6 +443,9 @@ class ECEI:
                 first_d = True
             i += 1
 
+        if start_c + shots > clear_shots.shape[0]-1:
+            shots = clear_shots.shape[0] - start_c - 1
+
         shot_list = np.array([clear_shots[start_c,0]])
         for i in range(shots-1):
             shot_list = np.append(shot_list, [clear_shots[i+start_c+1,0]])
@@ -435,7 +454,7 @@ class ECEI:
         no_disrupt = False
         i = start_d
         while not last:
-            if disrupt_shots[i,0] <= clear_shots[start_c+shots-1,0]:
+            if disrupt_shots[i,0] >= clear_shots[start_c+shots-1,0]:
                 end_d = i
                 last = True
             i += 1
@@ -464,7 +483,7 @@ class ECEI:
             shot_1: int, the shot number you want to start with
             clear_file: The path to the clear shot list
             disrupt_file: The path to the disruptive shot list
-            save_path: location where the channel folders will be stored,
+            save_path: location where the shot hdf5 files will be stored,
                        current directory by default
         """
         clear_shots = np.loadtxt(clear_file)
@@ -485,6 +504,9 @@ class ECEI:
                 first_d = True
             i += 1
 
+        if start_c + shots > clear_shots.shape[0]-1:
+            shots = clear_shots.shape[0] - start_c - 1
+
         shot_list = np.array([clear_shots[start_c,0]])
         for i in range(shots-1):
             shot_list = np.append(shot_list, [clear_shots[i+start_c+1,0]])
@@ -493,7 +515,7 @@ class ECEI:
         no_disrupt = False
         i = start_d
         while not last:
-            if disrupt_shots[i,0] <= clear_shots[start_c+shots-1,0]:
+            if disrupt_shots[i,0] >= clear_shots[start_c+shots-1,0]:
                 end_d = i
                 last = True
             i += 1
@@ -514,7 +536,7 @@ class ECEI:
         if not os.path.exists(missing_path):
             os.mkdir(missing_path)
 
-        missed = Count_Missing(shot_list, channel_paths, missing_path)
+        missed = Count_Missing(shot_list, save_path, missing_path)
 
         return
 
@@ -530,3 +552,69 @@ class ECEI:
                 if filename.endswith('hdf5'):
                     shot = os.path.join(save_path, filename)
                     os.remove(shot)
+
+
+    def Clean_Missing_Signals(self, save_path = os.getcwd()):
+        """
+        Removes all signal files with all channels missing in the save_path directory.
+        """
+        check = input("WARNING: this function will delete ALL signal files in the "+\
+                      "designated save path which have all channel signals missing. "+\
+                      "Type 'yes' to continue, anything else to cancel.\n")
+        if check == 'yes':
+            for filename in os.listdir(save_path):
+                if filename.endswith('hdf5'):
+                    shot = os.path.join(save_path, filename)
+                    f = h5py.File(shot, 'r')
+                    count = 0
+                    for key in f.keys():
+                        if key.startswith('missing'):
+                            count += 1
+                    if count == 160:
+                        f.close()
+                        if os.path.getsize(shot) <= 342289:
+                            os.remove(shot)
+                    else:
+                        f.close()
+
+
+    def Clean_Missing_Signal(self, shot_file):
+        """
+        Removes a single shot file if it has all channel signals missing.
+        """
+        shot = os.path.join(os.getcwd(), shot_file)
+        f = h5py.File(shot, 'r')
+        count = 0
+        for key in f.keys():
+            if key.startswith('missing'):
+                count += 1
+        if count == 160:
+            f.close()
+            check = input("You are about to delete "+shot+". Are "+\
+                          "you sure about that?\n")
+            if check == 'yes':
+                os.remove(shot)
+        else:
+            f.close()
+
+
+    def Clean_Missing_Signal_List(self, shots):
+        """
+        Removes shot files in a list if they have all channel signals missing.
+        """
+        for s in shots:
+            shot_file = str(s)+".hdf5"
+            shot = os.path.join(os.getcwd(), shot_file)
+            f = h5py.File(shot, 'r')
+            count = 0
+            for key in f.keys():
+                if key.startswith('missing'):
+                    count += 1
+            if count == 160:
+                f.close()
+                check = input("You are about to delete "+shot+". Are "+\
+                              "you sure about that?\n")
+                if check == 'yes':
+                    os.remove(shot)
+            else:
+                f.close()

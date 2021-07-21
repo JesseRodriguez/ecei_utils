@@ -105,27 +105,35 @@ def Fetch_ECEI_d3d(channel_path, shot_number, c = None, verbose = False):
     return None, None, None, False
 
 
-def Download_Shot(shot_num_queue, c, channel_paths, sentinel = -1,\
-                  verbose = False, d_sample = 1):
+def Download_Shot(shot_num_queue, c, n_shots, n_procs, channel_paths, sentinel = -1,\
+                  verbose = False, d_sample = 1, try_again = False):
     """
     Accepts a multiprocessor queue of shot numbers and downloads/saves data for
     a single shot off the front of the queue.
 
     Args:
-        shot_num_queue: muliprocessing queue object containing shot numbers
+        shot_num_queue: multiprocessing queue object containing shot numbers
         c: MDSplus.Connection object
+        n_shots: int, total number of shots to be processed
+        n_proc: int, number of processes
         channel_paths: list containing savepaths to channel folders
         sentinel: sentinel value; -1 by default. Serves as the mechanism for
                   terminating the parallel program.
         verbose: bool, suppress print statements
         d_sample: int, downsample factor, MUST BE IN FORM 10^y
+        try_again: bool, tells script to try and download signals that were
+                   found to be missing in a prior run.
     """
     missing_shots = 0
     while True:
         shot_num = shot_num_queue.get()
+        shots_left = shot_num_queue.qsize() - n_procs
+        shots_progress = 100*(n_shots - shots_left)/n_shots
+        shots_progress_next = 100*(n_shots + 1 - shots_left)/n_shots
         if shot_num == sentinel:
             break
         shot_complete = True
+        chan_done = 0
         for channel_path in channel_paths:
             save_path = channel_path[:-9]+'{}.hdf5'.format(int(shot_num))
             channel = channel_path[-9:]
@@ -136,6 +144,8 @@ def Download_Shot(shot_num_queue, c, channel_paths, sentinel = -1,\
                     f = h5py.File(save_path, 'r')
                     for key in f.keys():
                         if key == channel:
+                            success = True
+                        if key.startswith('missing') and not try_again:
                             success = True
                     f.close()
                 else:
@@ -196,6 +206,10 @@ def Download_Shot(shot_num_queue, c, channel_paths, sentinel = -1,\
             sys.stdout.flush()
             if not success:
                 missing_shots += 1
+            chan_done += 1
+            shot_prog = chan_done/160
+            overall_prog = shots_progress + (shots_progress_next-shots_progress)*shot_prog
+            print('Approximate download progress: {:.2f}%.'.format(overall_prog))
 
     print('Finished with {} channel signals missing.'.format(missing_shots))
     return
@@ -203,7 +217,7 @@ def Download_Shot(shot_num_queue, c, channel_paths, sentinel = -1,\
 
 def Download_Shot_List(shot_numbers, channel_paths, max_cores = 8,\
                        server = 'atlas.gat.com', verbose = False,\
-                       d_sample = 1):
+                       d_sample = 1, try_again = False):
     """
     Accepts list of shots and downloads them in parallel
 
@@ -214,12 +228,15 @@ def Download_Shot_List(shot_numbers, channel_paths, max_cores = 8,\
         server: MDSplus server, str. D3D server by default
         verbose: bool, suppress print statements
         d_sample: int, downsample factor, MUST BE IN FORM 10^y
+        try_again: bool, tells script to try and download signals that were
+                   found to be missing in a prior run.
     """
     sentinel = -1
-    fn = partial(Download_Shot, channel_paths = channel_paths,\
-                 sentinel = sentinel, verbose = verbose,\
-                 d_sample = d_sample)
     num_cores = min(mp.cpu_count(), max_cores)
+    fn = partial(Download_Shot, n_shots = len(shot_numbers),\
+                 n_procs = num_cores, channel_paths = channel_paths,\
+                 sentinel = sentinel, verbose = verbose,\
+                 d_sample = d_sample, try_again = try_again)
     queue = mp.Queue()
     assert len(shot_numbers) < 32000
     for shot_num in shot_numbers:
@@ -351,7 +368,7 @@ class ECEI:
     ###########################################################################
     def Acquire_Shots_D3D(self, shot_numbers, save_path = os.getcwd(),\
                           max_cores = 8, verbose = False, chan_lowlim = 3,\
-                          chan_uplim = 22, d_sample = 1):
+                          chan_uplim = 22, d_sample = 1, try_again = False):
         """
         Accepts a list of shot numbers and downloads the data, saving them into
         folders corresponding to the individual channels. Returns nothing.
@@ -365,6 +382,8 @@ class ECEI:
             chan_lowlim: int, lower limit of subset of channels to download
             chan_uplim: int, upper limit of subset of channels to download
             d_sample: int, downsample factor, MUST BE IN FORM 10^y
+            try_again: bool, tells script to try and download signals that were
+                       found to be missing in a prior run.
         """
         t_b = time.time()
         # Construct channel save paths and create them if needed.
@@ -387,7 +406,7 @@ class ECEI:
 
         Download_Shot_List(shot_numbers, channel_paths, max_cores = max_cores,\
                            server = 'atlas.gat.com', verbose = verbose,\
-                           d_sample = d_sample)
+                           d_sample = d_sample, try_again = try_again)
 
         missed = Count_Missing(shot_numbers, save_path, missing_path)
 
@@ -403,7 +422,7 @@ class ECEI:
     def Acquire_Shot_Sequence_D3D(self, shots, shot_1, clear_file, disrupt_file,\
                                   save_path = os.getcwd(), max_cores = 8,\
                                   verbose = False, chan_lowlim = 3, chan_uplim = 22,\
-                                  d_sample = 1):
+                                  d_sample = 1, try_again = False):
         """
         Accepts a desired number of non-disruptive shots, then downloads all
         shots in our labelled database up to the last non-disruptive shot.
@@ -424,6 +443,8 @@ class ECEI:
             chan_lowlim: int, lower limit of subset of channels to download
             chan_uplim: int, upper limit of subset of channels to download
             d_sample: int, downsample factor, MUST BE IN FORM 10^y
+            try_again: bool, tells script to try and download signals that were
+                       found to be missing in a prior run.
         """
         clear_shots = np.loadtxt(clear_file)
         disrupt_shots = np.loadtxt(disrupt_file)
@@ -467,7 +488,7 @@ class ECEI:
                 shot_list = np.append(shot_list, [disrupt_shots[i+start_d,0]])
 
         self.Acquire_Shots_D3D(shot_list, save_path, max_cores, verbose,\
-                               chan_lowlim, chan_uplim, d_sample)
+                               chan_lowlim, chan_uplim, d_sample, try_again)
 
         return
 
@@ -554,13 +575,15 @@ class ECEI:
                     os.remove(shot)
 
 
-    def Clean_Missing_Signals(self, save_path = os.getcwd()):
+    def Clean_Missing_Signals(self, missing_path, save_path = os.getcwd()):
         """
         Removes all signal files with all channels missing in the save_path directory.
         """
         check = input("WARNING: this function will delete ALL signal files in the "+\
                       "designated save path which have all channel signals missing. "+\
                       "Type 'yes' to continue, anything else to cancel.\n")
+        report = open(missing_path+'/AllChannelsMissing.txt', mode = 'w',\
+                  encoding='utf-8')
         if check == 'yes':
             for filename in os.listdir(save_path):
                 if filename.endswith('hdf5'):
@@ -573,9 +596,13 @@ class ECEI:
                     if count == 160:
                         f.close()
                         if os.path.getsize(shot) <= 342289:
+                            report.write(filename[:-5]+"\n")
                             os.remove(shot)
                     else:
                         f.close()
+
+        report.close()
+
 
 
     def Clean_Missing_Signal(self, shot_file):

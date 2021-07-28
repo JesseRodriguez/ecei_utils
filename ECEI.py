@@ -145,7 +145,7 @@ def Download_Shot(shot_num_queue, c, n_shots, n_procs, channel_paths, sentinel =
                     for key in f.keys():
                         if key == channel:
                             success = True
-                        if key.startswith('missing') and not try_again:
+                        if key.startswith('missing') and key.endswith(channel) and not try_again:
                             success = True
                     f.close()
                 else:

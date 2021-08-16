@@ -18,7 +18,7 @@ import time
 import sys
 import os
 import multiprocessing as mp
-import MDSplus as MDS
+#import MDSplus as MDS
 from functools import partial
 import h5py
 import scipy.signal
@@ -338,11 +338,10 @@ class ECEI:
             save_dir: str, directory where shot files are stored
         """
         shot_s = str(shot)
-        for filename in os.listdir(save_dir):
-            if filename.startswith(shot_s):
-                f = hdf5.File(save_dir+'/'+filename, 'r')
-                data = f.get('"LFS'+channel+'"')
-                np.savetxt(save_dir+'/'+shot_s+'_chan'+channel+'.txt', data)
+        f = h5py.File(save_dir+'/'+shot_s+'.hdf5', 'r')
+        data = np.asarray(f.get('"LFS'+channel+'"'))
+        np.savetxt(save_dir+'/'+shot_s+'_chan'+channel+'.txt', data)
+        f.close()
 
         return
 
@@ -645,3 +644,240 @@ class ECEI:
                     os.remove(shot)
             else:
                 f.close()
+
+
+    def Generate_Missing_Report_Concise(self, todays_date,\
+            data_path = os.getcwd(), output_path = os.getcwd()):
+        """
+        Creates a report of missing data in a more readable format.
+
+        Args:
+            todays_date: str, todays date in a readable, filename-friendly
+                         format, like "MM-DD-YYYY"
+            data_path: str, path where data files are stored
+            output_path: str, path where the report will go
+        """
+        # Collect necessary information.
+        shot_count = 0
+        none_missing = 0
+        all_missing = 0
+        one_missing = 0
+        eight_missing = 0
+        sixteen_missing = 0
+        sixteen_to_all_missing = 0
+        one_to_sixteen_missing = 0
+        missing_by_chan = {}
+        all_missing_list = []
+        some_missing_list = []
+        full_shot_list = []
+        file_list = os.listdir(data_path)
+        num_shots = len(file_list)
+        print("Generating concise report for the {} shots in "\
+              .format(int(num_shots))+data_path)
+        t_b = time.time()
+        for filename in file_list:
+            if filename.endswith('hdf5'):
+                f = h5py.File(data_path+'/'+filename, 'r')
+                miss_count = 0
+                for key in f.keys():
+                    if key[-9:] not in missing_by_chan:
+                        missing_by_chan[key[-9:]] = 0
+                    if key.startswith('missing'):
+                        miss_count += 1
+                        missing_by_chan[key[-9:]] += 1
+                if miss_count == 160:
+                    all_missing += 1
+                    for key in f.keys():
+                        missing_by_chan[key[-9:]] -= 1
+                    all_missing_list.append(int(filename[:-5]))
+                elif miss_count == 1:
+                    one_missing += 1
+                elif miss_count == 8:
+                    eight_missing += 1
+                elif miss_count == 16:
+                    sixteen_missing += 1
+                elif miss_count > 0 and miss_count <= 16:
+                    one_to_sixteen_missing += 1
+                    some_missing_list.append(int(filename[:-5]))
+                elif miss_count > 16 and miss_count < 160:
+                    sixteen_to_all_missing += 1
+                    some_missing_list.append(int(filename[:-5]))
+                elif miss_count == 0:
+                    none_missing += 1
+                    full_shot_list.append(int(filename[:-5]))
+                shot_count += 1
+                f.close()
+                if shot_count%10 == 0:
+                    print("{:.2f}% of the way through collecting missing shot info."\
+                          .format(shot_count/num_shots*100))
+
+        t_e = time.time()
+        T = t_e-t_b
+
+        print("Finished collecting info in {} seconds.".format(T))
+
+        # Write report
+        report = open(output_path+'/missing_signal_report_'+todays_date+'.txt', 'w')
+        report.write('This missing shot report was generated using the contents of '+
+                     output_path+' on '+todays_date+'.\n\n')
+        report.write('Number of shots with NO channels missing: {}\n'.format(\
+                     int(none_missing)))
+        report.write('Number of shots with ALL channels missing: {}\n'.format(\
+                     int(all_missing)))
+        report.write('Number of shots with just one channel missing: {}\n'.format(\
+                     int(one_missing)))
+        report.write('Number of shots with 8 channels missing: {}\n'.format(\
+                     int(eight_missing)))
+        report.write('Number of shots with 16 channels missing: {}\n'.format(\
+                     int(sixteen_missing)))
+        report.write('Number of shots with 2 to 15 channels missing: {}\n'.format(\
+                     int(one_to_sixteen_missing)))
+        report.write('Number of shots with 17 to 159 channels missing: {}\n\n'.format(\
+                     int(sixteen_to_all_missing)))
+        report.write('Missing signal distribution by channel in shots with '+
+                     'fewer than 160 channels missing:\n')
+        missing_chan_tot = 0
+        most_miss = 0
+        for key in missing_by_chan:
+            missing_chan_tot += missing_by_chan[key]
+            if missing_by_chan[key] > most_miss:
+                most_miss = missing_by_chan[key]
+
+        for i in range(20):
+            for j in range(8):
+                key = '"LFS{:02d}{:02d}"'.format(i+3, j+1)
+                bar_length = int(missing_by_chan[key]/most_miss*50)
+                bar = '█'*bar_length
+                report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
+                        str(int(missing_by_chan[key]))+' | '+bar+'\n')
+
+        report.close()
+
+        all_missing_list = np.sort(all_missing_list)
+        some_missing_list = np.sort(some_missing_list)
+        full_shot_list = np.sort(full_shot_list)
+
+        np.savetxt(output_path+'/all_channels_missing_list.txt', all_missing_list, fmt='%i')
+        np.savetxt(output_path+'/some_channels_missing_list.txt', some_missing_list, fmt='%i')
+        np.savetxt(output_path+'/no_channels_missing_list.txt', full_shot_list, fmt='%i')
+
+
+    def Generate_Quality_Report(self, todays_date, data_path, disrupt_list,\
+                                shots_of_interest, shotlist_name, output_path =\
+                                os.getcwd()):
+        """
+        Create a report that checks shots in shots_of_interest for NaNs, as
+        well as for cases in which the data collection ceases before t_disrupt.
+        If the shots are missing channels, the report will give the number of
+        channels missed per shot.
+
+        Args:
+            todays_date: str, todays date in a readable, filename-friendly
+                         format, like "MM-DD-YYYY"
+            data_path: str, path where data files are stored.
+            disrupt_list: numpy array, shot list that contains the disruptive
+                          shots of interest.
+            shots_of_interest: numpy array, shot list that contains the shots
+                               you would like to check.
+            shotlist_name: str, name describing the shotlist of interest.
+            output_path: str, path where the report will go.
+        """
+        print("Generating a data quality report for {} shots of interest in "\
+              .format(int(len(shots_of_interest)))+data_path)
+        t_b = time.time()
+
+        contains_NaN = {}
+        ends_before_t_disrupt = {}
+        missing_chans = {}
+
+        count = 0
+        files = os.listdir(data_path)
+        num_files = len(files)
+        for filename in files:
+            if filename.endswith('hdf5'):
+                count += 1
+                shot_no = int(filename[:-5])
+                if shot_no in shots_of_interest:
+                    f = h5py.File(data_path+'/'+filename, 'r')
+                    keys = f.keys()
+                    # First we check for NaNs
+                    for key in keys:
+                        data = np.asarray(f.get(key))
+                        d_sum = np.sum(np.sum(data))
+                        if np.isnan(d_sum):
+                            if shot_no not in contains_NaN:
+                                contains_NaN[shot_no] = []
+                            contains_NaN[shot_no].append(key[-5:-1])
+                        # Next, missing channels
+                        if key.startswith('missing'):
+                            if shot_no not in missing_chans:
+                                missing_chans[shot_no] = []
+                            missing_chans[shot_no].append(key[-5:-1])
+                        # Now we check if data is collected up to t_disrupt
+                        if shot_no in disrupt_list[:,0] and not key.startswith('missing'):
+                            i_disrupt = np.where(disrupt_list[:,0]==shot_no)[0][0]
+                            t_max = np.max(data[:,0])
+                            t_disrupt = disrupt_list[i_disrupt,1]
+                            if t_max < t_disrupt:
+                                if shot_no not in ends_before_t_disrupt:
+                                    ends_before_t_disrupt[shot_no] = []
+                                ends_before_t_disrupt[shot_no].append(key[-5:-1])
+                    print("{:2f}% of the way through shot files".format(count/num_files*100))
+                    f.close()
+
+        t_e = time.time()
+        T = t_e-t_b
+
+        print("Finished collecting info in {} seconds.".format(T))
+
+        # Write report
+        report = open(output_path+'/data_quality_report_'+todays_date+'.txt', 'w')
+        report.write('This data quality report was generated using the contents of '+
+                     output_path+'\non '+todays_date+', using a shotlist named "'+\
+                     shotlist_name+'".\n\n')
+
+        report.write('Number of shots with NaNs present: {}\n'.format(\
+                     int(len(contains_NaN))))
+        if len(contains_NaN) > 0:
+            for shot in contains_NaN:
+                report.write('Shot {} Contains NaNs in the following channels:\n'.\
+                             format(shot))
+                count = 0
+                for i in range(len(contains_NaN[shot])):
+                    count += 1
+                    if count%10 == 0:
+                        report.write(contains_NaN[shot][i]+',\n')
+                    else:
+                        report.write(contains_NaN[shot][i]+', ')
+
+        report.write('\n\n')
+        report.write('Number of shots that cease data collection before t_disrupt: {}\n'.format(\
+                     int(len(ends_before_t_disrupt))))
+        if len(ends_before_t_disrupt) > 0:
+            for shot in ends_before_t_disrupt:
+                report.write('Shot {} stops short of t_disrupt in the following channels:\n'.\
+                             format(shot))
+                count = 0
+                for i in range(len(ends_before_t_disrupt[shot])):
+                    count += 1
+                    if count%10 == 0:
+                        report.write(ends_before_t_disrupt[shot][i]+',\n')
+                    else:
+                        report.write(ends_before_t_disrupt[shot][i]+', ')
+
+        report.write('\n\n')
+        report.write('Number of shots with missing channels: {}\n'.format(\
+                     int(len(missing_chans))))
+        if len(missing_chans) > 0:
+            for shot in missing_chans:
+                report.write('Shot {} is missing data in the following channels:\n'.\
+                             format(shot))
+                count = 0
+                for i in range(len(missing_chans[shot])):
+                    count += 1
+                    if count%10 == 0:
+                        report.write(missing_chans[shot][i]+',\n')
+                    else:
+                        report.write(missing_chans[shot][i]+', ')
+
+        report.close()

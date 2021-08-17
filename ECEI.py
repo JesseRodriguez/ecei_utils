@@ -865,11 +865,12 @@ class ECEI:
                                 contains_NaN[shot_no] = []
                             contains_NaN[shot_no].append(key[-5:-1])
                         # Check to make sure 'something' happens
-                        sig = np.sqrt(np.var(data[:,1]))
-                        if sig < 0.001:
-                            if shot_no not in low_std_dev = {}:
-                                low_std_dev[shot_no] = []
-                            low_std_dev[shot_no].append(key[-5:-1])
+                        if not key.startswith('missing'):
+                            sig = np.sqrt(np.var(data[:,1]))
+                            if sig < 0.001:
+                                if shot_no not in low_std_dev:
+                                    low_std_dev[shot_no] = []
+                                low_std_dev[shot_no].append(key[-5:-1])
                         # Next, missing channels
                         if key.startswith('missing'):
                             if shot_no not in missing_chans:

@@ -9,7 +9,7 @@ Jesse A Rodriguez, 06/28/2021
 import numpy as np
 import matplotlib as mpl
 mpl.rcParams['figure.dpi']=100
-import matplotlib.pylab as plt
+import matplotlib.pyplot as plt
 plt.rc('font', family='tahoma')
 font = 18
 plt.rc('xtick', labelsize=font)
@@ -327,6 +327,49 @@ class ECEI:
     ###########################################################################
     ## Visualization
     ###########################################################################
+    def Single_Shot_Plot(self, shot, data_path, save_dir = os.getcwd(), show = True):
+        """
+        Plot voltage traces for a single shot.
+
+        Args:
+            shot: int, shot number
+            data_path: str, path to ECEI data
+            save_dir: str, directory for output plot image
+            shot: bool, determines whether output is shown right away
+        """
+        shot_file = data_path+'/'+str(int(shot))+'.hdf5'
+        f = h5py.File(shot_file, 'r')
+        fig, ax = plt.subplots(5, 4)
+        count = 0
+        plot_no = 0
+        for channel in self.ecei_channels:
+            count += 1
+            row = plot_no//5
+            col = plot_no%5
+            if channel in f.keys():
+                data = f.get(channel)
+                ax[row,col].plot(data[0,:], data[1,:], label = 'YY = '+channel[-3,-1])
+            if count%8 == 0:
+                plot_no += 1
+                XX = count//8
+                title = 'XX = {:02d}'.format(XX)
+                ax[row,col].set_title(title)
+                ax[row,col].legend()
+
+        fig.suptitle('Shot #{}'.format(int(shot)))
+        for axs in ax.flat:
+            axs.set(xlabel='Time (ms)', ylabel='ECEi Voltage (V)')
+
+        # Hide x labels and tick labels for top plots and y ticks for right plots.
+        for axs in ax.flat:
+            axs.label_outer()
+
+        if show: 
+            fig.show()
+
+        fig.save(save_dir+'/Shot_{}.pdf'.format(int(shot)))
+
+
     def Generate_Txt(self, shot, channel, save_dir = os.getcwd()):
         """
         Get a .txt file out for reading signal data
@@ -849,6 +892,7 @@ class ECEI:
                         report.write(contains_NaN[shot][i]+',\n')
                     else:
                         report.write(contains_NaN[shot][i]+', ')
+                report.write('\n')
 
         report.write('\n\n')
         report.write('Number of shots that cease data collection before t_disrupt: {}\n'.format(\
@@ -864,6 +908,7 @@ class ECEI:
                         report.write(ends_before_t_disrupt[shot][i]+',\n')
                     else:
                         report.write(ends_before_t_disrupt[shot][i]+', ')
+                report.write('\n')
 
         report.write('\n\n')
         report.write('Number of shots with missing channels: {}\n'.format(\
@@ -879,5 +924,6 @@ class ECEI:
                         report.write(missing_chans[shot][i]+',\n')
                     else:
                         report.write(missing_chans[shot][i]+', ')
+                report.write('\n')
 
         report.close()

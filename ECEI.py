@@ -8,12 +8,12 @@ Jesse A Rodriguez, 06/28/2021
 
 import numpy as np
 import matplotlib as mpl
-mpl.rcParams['figure.dpi']=100
+#mpl.rcParams['figure.dpi']=10
 import matplotlib.pyplot as plt
-plt.rc('font', family='tahoma')
-font = 18
-plt.rc('xtick', labelsize=font)
-plt.rc('ytick', labelsize=font)
+#plt.rc('font', family='tahoma')
+#font = 1
+#plt.rc('xtick', labelsize=font)
+#plt.rc('ytick', labelsize=font)
 import time
 import sys
 import os
@@ -339,7 +339,9 @@ class ECEI:
         """
         shot_file = data_path+'/'+str(int(shot))+'.hdf5'
         f = h5py.File(shot_file, 'r')
-        fig, ax = plt.subplots(5, 4)
+        fig = plt.figure()
+        gs = fig.add_gridspec(4, 5, hspace=0.35, wspace=0)
+        ax = gs.subplots(sharex='col')
         count = 0
         plot_no = 0
         for channel in self.ecei_channels:
@@ -348,26 +350,36 @@ class ECEI:
             col = plot_no%5
             if channel in f.keys():
                 data = f.get(channel)
-                ax[row,col].plot(data[0,:], data[1,:], label = 'YY = '+channel[-3,-1])
+                ax[row,col].plot(data[:,0], data[:,1], label = 'YY = '+channel[-3:-1],\
+                                 linewidth = 0.4, alpha = 0.8)
             if count%8 == 0:
                 plot_no += 1
-                XX = count//8
+                XX = count//8 + 2
                 title = 'XX = {:02d}'.format(XX)
-                ax[row,col].set_title(title)
-                ax[row,col].legend()
+                ax[row,col].set_title(title, fontsize = 5)
+                #ax[row,col].legend(prop={'size': 2.75})
+                ax[row,col].tick_params(width = 0.3)
 
-        fig.suptitle('Shot #{}'.format(int(shot)))
+        fig.suptitle('Shot #{}'.format(int(shot)), fontsize = 10)
         for axs in ax.flat:
-            axs.set(xlabel='Time (ms)', ylabel='ECEi Voltage (V)')
+            axs.set_xlabel('Time (ms)', fontsize = 5)
+            axs.set_ylabel('ECEi Voltage (V)', fontsize = 5)
 
         # Hide x labels and tick labels for top plots and y ticks for right plots.
         for axs in ax.flat:
             axs.label_outer()
+            axs.tick_params(axis='x', labelsize = 5)
+            axs.tick_params(axis='y', labelsize = 5)
+
+        labels = []
+        for i in range(8):
+            labels.append('YY = {:2d}'.format(i+1))
+        fig.legend(labels=labels, loc="lower center", ncol=8, prop={'size': 5.5})
 
         if show: 
             fig.show()
 
-        fig.save(save_dir+'/Shot_{}.pdf'.format(int(shot)))
+        fig.savefig(save_dir+'/Shot_{}.pdf'.format(int(shot)))
 
 
     def Generate_Txt(self, shot, channel, save_dir = os.getcwd()):
@@ -832,6 +844,7 @@ class ECEI:
         contains_NaN = {}
         ends_before_t_disrupt = {}
         missing_chans = {}
+        low_std_dev = {}
 
         count = 0
         files = os.listdir(data_path)
@@ -851,6 +864,12 @@ class ECEI:
                             if shot_no not in contains_NaN:
                                 contains_NaN[shot_no] = []
                             contains_NaN[shot_no].append(key[-5:-1])
+                        # Check to make sure 'something' happens
+                        sig = np.sqrt(np.var(data[:,1]))
+                        if sig < 0.001:
+                            if shot_no not in low_std_dev = {}:
+                                low_std_dev[shot_no] = []
+                            low_std_dev[shot_no].append(key[-5:-1])
                         # Next, missing channels
                         if key.startswith('missing'):
                             if shot_no not in missing_chans:
@@ -908,6 +927,22 @@ class ECEI:
                         report.write(ends_before_t_disrupt[shot][i]+',\n')
                     else:
                         report.write(ends_before_t_disrupt[shot][i]+', ')
+                report.write('\n')
+
+        report.write('\n\n')
+        report.write('Number of shots that have a standard deviation which is smaller than 1 mV: {}\n'.format(\
+                     int(len(low_std_dev))))
+        if len(low_std_dev) > 0:
+            for shot in low_std_dev:
+                report.write('Shot {} stops short of t_disrupt in the following channels:\n'.\
+                             format(shot))
+                count = 0
+                for i in range(len(low_std_dev[shot])):
+                    count += 1
+                    if count%10 == 0:
+                        report.write(low_std_dev[shot][i]+',\n')
+                    else:
+                        report.write(low_std_dev[shot][i]+', ')
                 report.write('\n')
 
         report.write('\n\n')

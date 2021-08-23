@@ -18,11 +18,14 @@ import time
 import sys
 import os
 import multiprocessing as mp
-#import MDSplus as MDS
 from functools import partial
 import h5py
 import scipy.signal
 import math
+try:
+    import MDSplus as MDS
+except ImportError:
+    pass
 
 ###############################################################################
 ## Utility Functions and Globals

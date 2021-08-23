@@ -687,6 +687,7 @@ class ECEI:
                         report.write(contains_NaN[shot][i]+', ')
                 report.write('\n')
 
+        report.write('_'*80)
         report.write('\n\n')
         report.write('Number of shots that cease data collection before t_disrupt: {}\n'.format(\
                      int(len(ends_before_t_disrupt))))
@@ -703,12 +704,13 @@ class ECEI:
                         report.write(ends_before_t_disrupt[shot][i]+', ')
                 report.write('\n')
 
+        report.write('_'*80)
         report.write('\n\n')
         report.write('Number of shots that have a standard deviation which is smaller than 1 mV: {}\n'.format(\
                      int(len(low_std_dev))))
         if len(low_std_dev) > 0:
             for shot in low_std_dev:
-                report.write('Shot {} stops short of t_disrupt in the following channels:\n'.\
+                report.write('Shot {} has a std. dev less than 1 mV in the following channels:\n'.\
                              format(shot))
                 count = 0
                 for i in range(len(low_std_dev[shot])):
@@ -719,6 +721,7 @@ class ECEI:
                         report.write(low_std_dev[shot][i]+', ')
                 report.write('\n')
 
+        report.write('_'*80)
         report.write('\n\n')
         report.write('Number of shots with missing channels: {}\n'.format(\
                      int(len(missing_chans))))

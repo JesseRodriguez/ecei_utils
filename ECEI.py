@@ -32,7 +32,8 @@ except ImportError:
 ###############################################################################
 def Fetch_ECEI_d3d(channel_path, shot_number, c = None, verbose = False):
     """
-    Basic fetch ecei data function.
+    Basic fetch ecei data function, uses MDSplus Connection objects and looks
+    for data in all the locations we know of.
 
     Args:
         channel_path: str, path to save .txt file (channel folder, format LFSxxxx)
@@ -259,8 +260,9 @@ def Download_Shot_List(shot_numbers, channel_paths, max_cores = 8,\
 
 def Count_Missing(shot_list, shot_path, missing_path):
     """
-    Accepts a list of all channel paths and produces an up-to-date list of all
-    missing data and places it in missing_path
+    Accepts a shot list and a path to the shot files and produces an up-to-date
+    list of all missing data and places it in missing_path. Automatically
+    called after a download operation.
 
     Args:
         shot_list: 1-D numpy array of DIII-D shot numbers
@@ -306,7 +308,7 @@ def Count_Missing(shot_list, shot_path, missing_path):
 class ECEI:
     def __init__(self):
         """
-        Initialize ECEI object
+        Initialize ECEI object by creating an internal list of channel keys.
 
         Args:
         """
@@ -318,243 +320,11 @@ class ECEI:
     ###########################################################################
     ## Data Processing
     ###########################################################################
-    def Viz(self):
-        """
-        Visualization function
-        
-        Args:
-        """
-        return 0
-
-
-    ###########################################################################
-    ## Visualization
-    ###########################################################################
-    def Single_Shot_Plot(self, shot, data_path, save_dir = os.getcwd(), show = True):
-        """
-        Plot voltage traces for a single shot.
-
-        Args:
-            shot: int, shot number
-            data_path: str, path to ECEI data
-            save_dir: str, directory for output plot image
-            shot: bool, determines whether output is shown right away
-        """
-        shot_file = data_path+'/'+str(int(shot))+'.hdf5'
-        f = h5py.File(shot_file, 'r')
-        fig = plt.figure()
-        gs = fig.add_gridspec(4, 5, hspace=0.35, wspace=0)
-        ax = gs.subplots(sharex='col')
-        count = 0
-        plot_no = 0
-        for channel in self.ecei_channels:
-            count += 1
-            row = plot_no//5
-            col = plot_no%5
-            if channel in f.keys():
-                data = f.get(channel)
-                ax[row,col].plot(data[:,0], data[:,1], label = 'YY = '+channel[-3:-1],\
-                                 linewidth = 0.4, alpha = 0.8)
-            if count%8 == 0:
-                plot_no += 1
-                XX = count//8 + 2
-                title = 'XX = {:02d}'.format(XX)
-                ax[row,col].set_title(title, fontsize = 5)
-                #ax[row,col].legend(prop={'size': 2.75})
-                ax[row,col].tick_params(width = 0.3)
-
-        fig.suptitle('Shot #{}'.format(int(shot)), fontsize = 10)
-        for axs in ax.flat:
-            axs.set_xlabel('Time (ms)', fontsize = 5)
-            axs.set_ylabel('ECEi Voltage (V)', fontsize = 5)
-
-        # Hide x labels and tick labels for top plots and y ticks for right plots.
-        for axs in ax.flat:
-            axs.label_outer()
-            axs.tick_params(axis='x', labelsize = 5)
-            axs.tick_params(axis='y', labelsize = 5)
-
-        labels = []
-        for i in range(8):
-            labels.append('YY = {:2d}'.format(i+1))
-        fig.legend(labels=labels, loc="lower center", ncol=8, prop={'size': 5.5})
-
-        if show: 
-            fig.show()
-
-        fig.savefig(save_dir+'/Shot_{}.pdf'.format(int(shot)))
-
-
-    def Generate_Txt(self, shot, channel, save_dir = os.getcwd()):
-        """
-        Get a .txt file out for reading signal data
-
-        Args:
-            shot: int, shot number
-            channel: str, format "XXYY", 03<=XX<=22, 01<=YY<=08, designates
-                     channel
-            save_dir: str, directory where shot files are stored
-        """
-        shot_s = str(shot)
-        f = h5py.File(save_dir+'/'+shot_s+'.hdf5', 'r')
-        data = np.asarray(f.get('"LFS'+channel+'"'))
-        np.savetxt(save_dir+'/'+shot_s+'_chan'+channel+'.txt', data)
-        f.close()
-
-        return
-
-    
-    def Generate_Txt_Interactive(self, save_dir = os.getcwd()):
-        """
-        Get a .txt file out for reading signal data, accepts input from command
-        line.
-
-        Args:
-            save_dir: str, directory where shot files are stored
-        """
-        shot = int(input("Which shot? Enter an integer.\n"))
-        channel = input("Which channel? format 'XXYY', 03<=XX<=22, 01<=YY<=08.\n")
-
-        self.Generate_Txt(shot, channel, save_dir)
-
-        return
-
-
-    ###########################################################################
-    ## Data Acquisition
-    ###########################################################################
-    def Acquire_Shots_D3D(self, shot_numbers, save_path = os.getcwd(),\
-                          max_cores = 8, verbose = False, chan_lowlim = 3,\
-                          chan_uplim = 22, d_sample = 1, try_again = False):
-        """
-        Accepts a list of shot numbers and downloads the data, saving them into
-        folders corresponding to the individual channels. Returns nothing.
-
-        Args:
-            shot_numbers: 1-D numpy array of integers, DIII-D shot numbers
-            save_path: location where the channel folders will be stored,
-                       current directory by default
-            max_cores: int, max # of cores to carry out download tasks
-            verbose: bool, suppress most print statements
-            chan_lowlim: int, lower limit of subset of channels to download
-            chan_uplim: int, upper limit of subset of channels to download
-            d_sample: int, downsample factor, MUST BE IN FORM 10^y
-            try_again: bool, tells script to try and download signals that were
-                       found to be missing in a prior run.
-        """
-        t_b = time.time()
-        # Construct channel save paths and create them if needed.
-        channel_paths = []
-        for i in range(len(self.ecei_channels)):
-            XX = int(self.ecei_channels[i][-5:-3])
-            if XX >= chan_lowlim and XX <= chan_uplim:
-                channel_path = os.path.join(save_path, self.ecei_channels[i])
-                channel_paths.append(channel_path)
-        #Missing shots directory
-        missing_path = os.path.join(save_path, 'missing_shot_info')
-        if not os.path.exists(missing_path):
-            os.mkdir(missing_path)
-
-        try:
-            c = MDS.Connection('atlas.gat.com')
-        except Exception as e:
-            print(e)
-            return False
-
-        Download_Shot_List(shot_numbers, channel_paths, max_cores = max_cores,\
-                           server = 'atlas.gat.com', verbose = verbose,\
-                           d_sample = d_sample, try_again = try_again)
-
-        missed = Count_Missing(shot_numbers, save_path, missing_path)
-
-        t_e = time.time()
-        T = t_e-t_b
-
-        print("Downloaded {} out of {} signals in {} seconds.".format(missed[1]-missed[0],\
-               missed[1], T))
-
-        return
-
-
-    def Acquire_Shot_Sequence_D3D(self, shots, shot_1, clear_file, disrupt_file,\
-                                  save_path = os.getcwd(), max_cores = 8,\
-                                  verbose = False, chan_lowlim = 3, chan_uplim = 22,\
-                                  d_sample = 1, try_again = False):
-        """
-        Accepts a desired number of non-disruptive shots, then downloads all
-        shots in our labelled database up to the last non-disruptive shot.
-        Returns nothing. Shots are saved in hdf5 format, downsampling is done
-        BEFORE saving. Each channel is labelled within its own dataset in the
-        hdf5 file, where the label is the channel name/MDS point name, e.g.
-        '"LFSXXYY"'.
-
-        Args:
-            shots: int, number of non-disruptive shots you want to download
-            shot_1: int, the shot number you want to start with
-            clear_file: The path to the clear shot list
-            disrupt_file: The path to the disruptive shot list
-            save_path: location where the channel folders will be stored,
-                       current directory by default
-            max_cores: int, max # of cores to carry out download tasks
-            verbose: bool, suppress some exception info
-            chan_lowlim: int, lower limit of subset of channels to download
-            chan_uplim: int, upper limit of subset of channels to download
-            d_sample: int, downsample factor, MUST BE IN FORM 10^y
-            try_again: bool, tells script to try and download signals that were
-                       found to be missing in a prior run.
-        """
-        clear_shots = np.loadtxt(clear_file)
-        disrupt_shots = np.loadtxt(disrupt_file)
-
-        first_c = False
-        first_d = False
-        i = 0
-        while not first_c:
-            if clear_shots[i,0] >= shot_1:
-                start_c = i
-                first_c = True
-            i += 1
-        i = 0
-        while not first_d:
-            if disrupt_shots[i,0] >= shot_1:
-                start_d = i
-                first_d = True
-            i += 1
-
-        if start_c + shots > clear_shots.shape[0]-1:
-            shots = clear_shots.shape[0] - start_c - 1
-
-        shot_list = np.array([clear_shots[start_c,0]])
-        for i in range(shots-1):
-            shot_list = np.append(shot_list, [clear_shots[i+start_c+1,0]])
-
-        last = False
-        no_disrupt = False
-        i = start_d
-        while not last:
-            if disrupt_shots[i,0] >= clear_shots[start_c+shots-1,0]:
-                end_d = i
-                last = True
-            i += 1
-            if i >= disrupt_shots.shape[0]:
-                no_disrupt = True
-                last = True
-
-        if not no_disrupt:
-            for i in range(end_d - start_d + 1):
-                shot_list = np.append(shot_list, [disrupt_shots[i+start_d,0]])
-
-        self.Acquire_Shots_D3D(shot_list, save_path, max_cores, verbose,\
-                               chan_lowlim, chan_uplim, d_sample, try_again)
-
-        return
-
-
     def Generate_Missing_Report(self, shots, shot_1, clear_file, disrupt_file,\
                                 save_path = os.getcwd()):
         """
-        Accept a start shot and a number of clear shots and generate a missing
-        shot report for all shots in that range.
+        Accept a start shot and a number of clear shots and generate a verbose
+        missing shot report for all shots in that range of the shot list files.
 
         Args:
             shots: int, number of non-disruptive shots you want to download
@@ -966,3 +736,234 @@ class ECEI:
                 report.write('\n')
 
         report.close()
+
+
+    ###########################################################################
+    ## Visualization
+    ###########################################################################
+    def Single_Shot_Plot(self, shot, data_path, save_dir = os.getcwd(), show = False):
+        """
+        Plot voltage traces for a single shot, saves plot as a .pdf
+
+        Args:
+            shot: int, shot number
+            data_path: str, path to ECEI data
+            save_dir: str, directory for output plot image
+            shot: bool, determines whether output is shown right away
+        """
+        shot_file = data_path+'/'+str(int(shot))+'.hdf5'
+        f = h5py.File(shot_file, 'r')
+        fig = plt.figure()
+        gs = fig.add_gridspec(4, 5, hspace=0.35, wspace=0)
+        ax = gs.subplots(sharex='col')
+        count = 0
+        plot_no = 0
+        for channel in self.ecei_channels:
+            count += 1
+            row = plot_no//5
+            col = plot_no%5
+            if channel in f.keys():
+                data = f.get(channel)
+                ax[row,col].plot(data[:,0], data[:,1], label = 'YY = '+channel[-3:-1],\
+                                 linewidth = 0.4, alpha = 0.8)
+            if count%8 == 0:
+                plot_no += 1
+                XX = count//8 + 2
+                title = 'XX = {:02d}'.format(XX)
+                ax[row,col].set_title(title, fontsize = 5)
+                #ax[row,col].legend(prop={'size': 2.75})
+                ax[row,col].tick_params(width = 0.3)
+
+        fig.suptitle('Shot #{}'.format(int(shot)), fontsize = 10)
+        for axs in ax.flat:
+            axs.set_xlabel('Time (ms)', fontsize = 5)
+            axs.set_ylabel('ECEi Voltage (V)', fontsize = 5)
+
+        # Hide x labels and tick labels for top plots and y ticks for right plots.
+        for axs in ax.flat:
+            axs.label_outer()
+            axs.tick_params(axis='x', labelsize = 5)
+            axs.tick_params(axis='y', labelsize = 5)
+
+        labels = []
+        for i in range(8):
+            labels.append('YY = {:2d}'.format(i+1))
+        fig.legend(labels=labels, loc="lower center", ncol=8, prop={'size': 5.5})
+
+        if show: 
+            fig.show()
+
+        fig.savefig(save_dir+'/Shot_{}.pdf'.format(int(shot)))
+
+
+    def Generate_Txt(self, shot, channel, save_dir = os.getcwd()):
+        """
+        Get a .txt file out for signal data in a readable format for a single
+        channel.
+
+        Args:
+            shot: int, shot number
+            channel: str, format "XXYY", 03<=XX<=22, 01<=YY<=08, designates
+                     channel
+            save_dir: str, directory where shot files are stored
+        """
+        shot_s = str(shot)
+        f = h5py.File(save_dir+'/'+shot_s+'.hdf5', 'r')
+        data = np.asarray(f.get('"LFS'+channel+'"'))
+        np.savetxt(save_dir+'/'+shot_s+'_chan'+channel+'.txt', data)
+        f.close()
+
+        return
+
+    
+    def Generate_Txt_Interactive(self, save_dir = os.getcwd()):
+        """
+        Get a .txt file out for reading signal data, accepts input from command
+        line.
+
+        Args:
+            save_dir: str, directory where shot files are stored
+        """
+        shot = int(input("Which shot? Enter an integer.\n"))
+        channel = input("Which channel? format 'XXYY', 03<=XX<=22, 01<=YY<=08.\n")
+
+        self.Generate_Txt(shot, channel, save_dir)
+
+        return
+
+
+    ###########################################################################
+    ## Data Acquisition
+    ###########################################################################
+    def Acquire_Shots_D3D(self, shot_numbers, save_path = os.getcwd(),\
+                          max_cores = 8, verbose = False, chan_lowlim = 3,\
+                          chan_uplim = 22, d_sample = 1, try_again = False):
+        """
+        Accepts a list of shot numbers and downloads the data, saving them into
+        folders corresponding to the individual channels. Returns nothing. 
+        Shots are saved in hdf5 format, downsampling is done BEFORE saving. 
+        Each channel is labelled within its own dataset in the hdf5 file, where 
+        the label is the channel name/MDS point name, e.g. '"LFSXXYY"'. If data
+        is not found, labels are 'missing_"LFSXXYY"' with [-1.0] as the dataset.
+
+        Args:
+            shot_numbers: 1-D numpy array of integers, DIII-D shot numbers
+            save_path: location where the channel folders will be stored,
+                       current directory by default
+            max_cores: int, max # of cores to carry out download tasks
+            verbose: bool, suppress most print statements
+            chan_lowlim: int, lower limit of subset of channels to download
+            chan_uplim: int, upper limit of subset of channels to download
+            d_sample: int, downsample factor, MUST BE IN FORM 10^y
+            try_again: bool, tells script to try and download signals that were
+                       found to be missing in a prior run.
+        """
+        t_b = time.time()
+        # Construct channel save paths and create them if needed.
+        channel_paths = []
+        for i in range(len(self.ecei_channels)):
+            XX = int(self.ecei_channels[i][-5:-3])
+            if XX >= chan_lowlim and XX <= chan_uplim:
+                channel_path = os.path.join(save_path, self.ecei_channels[i])
+                channel_paths.append(channel_path)
+        #Missing shots directory
+        missing_path = os.path.join(save_path, 'missing_shot_info')
+        if not os.path.exists(missing_path):
+            os.mkdir(missing_path)
+
+        try:
+            c = MDS.Connection('atlas.gat.com')
+        except Exception as e:
+            print(e)
+            return False
+
+        Download_Shot_List(shot_numbers, channel_paths, max_cores = max_cores,\
+                           server = 'atlas.gat.com', verbose = verbose,\
+                           d_sample = d_sample, try_again = try_again)
+
+        missed = Count_Missing(shot_numbers, save_path, missing_path)
+
+        t_e = time.time()
+        T = t_e-t_b
+
+        print("Downloaded {} out of {} signals in {} seconds.".format(missed[1]-missed[0],\
+               missed[1], T))
+
+        return
+
+
+    def Acquire_Shot_Sequence_D3D(self, shots, shot_1, clear_file, disrupt_file,\
+                                  save_path = os.getcwd(), max_cores = 8,\
+                                  verbose = False, chan_lowlim = 3, chan_uplim = 22,\
+                                  d_sample = 1, try_again = False):
+        """
+        Accepts a desired number of non-disruptive shots, then downloads all
+        shots in our labelled database up to the last non-disruptive shot.
+        Returns nothing. Shots are saved in hdf5 format, downsampling is done
+        BEFORE saving. Each channel is labelled within its own dataset in the
+        hdf5 file, where the label is the channel name/MDS point name, e.g.
+        '"LFSXXYY"'. If data is not found, labels are 'missing_"LFSXXYY"' with 
+        [-1.0] as the dataset.
+
+        Args:
+            shots: int, number of non-disruptive shots you want to download
+            shot_1: int, the shot number you want to start with
+            clear_file: The path to the clear shot list
+            disrupt_file: The path to the disruptive shot list
+            save_path: location where the channel folders will be stored,
+                       current directory by default
+            max_cores: int, max # of cores to carry out download tasks
+            verbose: bool, suppress some exception info
+            chan_lowlim: int, lower limit of subset of channels to download
+            chan_uplim: int, upper limit of subset of channels to download
+            d_sample: int, downsample factor, MUST BE IN FORM 10^y
+            try_again: bool, tells script to try and download signals that were
+                       found to be missing in a prior run.
+        """
+        clear_shots = np.loadtxt(clear_file)
+        disrupt_shots = np.loadtxt(disrupt_file)
+
+        first_c = False
+        first_d = False
+        i = 0
+        while not first_c:
+            if clear_shots[i,0] >= shot_1:
+                start_c = i
+                first_c = True
+            i += 1
+        i = 0
+        while not first_d:
+            if disrupt_shots[i,0] >= shot_1:
+                start_d = i
+                first_d = True
+            i += 1
+
+        if start_c + shots > clear_shots.shape[0]-1:
+            shots = clear_shots.shape[0] - start_c - 1
+
+        shot_list = np.array([clear_shots[start_c,0]])
+        for i in range(shots-1):
+            shot_list = np.append(shot_list, [clear_shots[i+start_c+1,0]])
+
+        last = False
+        no_disrupt = False
+        i = start_d
+        while not last:
+            if disrupt_shots[i,0] >= clear_shots[start_c+shots-1,0]:
+                end_d = i
+                last = True
+            i += 1
+            if i >= disrupt_shots.shape[0]:
+                no_disrupt = True
+                last = True
+
+        if not no_disrupt:
+            for i in range(end_d - start_d + 1):
+                shot_list = np.append(shot_list, [disrupt_shots[i+start_d,0]])
+
+        self.Acquire_Shots_D3D(shot_list, save_path, max_cores, verbose,\
+                               chan_lowlim, chan_uplim, d_sample, try_again)
+
+        return
+
+

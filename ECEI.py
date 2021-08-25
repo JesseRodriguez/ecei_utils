@@ -992,3 +992,48 @@ class ECEI:
         return
 
 
+    def Fetch_Shot(self, shot_number, verbose = False):
+        """
+        Fetch shot data from MDSplus server directly as numpy arrays. Returns
+        a 1D time array and a 2D data array with shape (t_steps, 160), where
+        each column is the signal data from one channel, along with None in
+        place of a mapping and True to indicate success. Missing channels are
+        padded with zeros.
+
+        Args:
+            shot_number: int, shot number
+            verbose: bool, determines if MDS exceptions are printed
+        """
+        no_time = True
+        idx = 0
+        while no_time:
+            t, d, mapping, success = Fetch_ECEI_d3d(self.ecei_channels[idx],\
+                                                    shot_number, verbose = verbose)
+            if success:
+                time = np.asarray(t)
+                no_time = False
+            idx += 1
+            if idx >= 160:
+                return None, None, None, False
+
+        no_data = True
+        for channel in self.ecei_channels:
+            t, d, mapping, success = Fetch_ECEI_d3d(channel, shot_number,\
+                                                    verbose = verbose)
+            if success:
+                if no_data:
+                    data = np.asarray(d).reshape((time.shape[0],1))
+                    no_data = False
+                else:
+                    data = np.append(data, d, axis = 1)
+            else:
+                if no_data:
+                    data = np.zeros((time.shape[0],1))
+                    no_data = False
+                else:
+                    d = np.zeros((time.shape[0],1))
+                    data = np.append(data, d, axis = 1)
+
+        return time, data, None, True
+
+

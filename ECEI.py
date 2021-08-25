@@ -27,16 +27,17 @@ try:
 except ImportError:
     pass
 
-###############################################################################
+################################################################################
 ## Utility Functions and Globals
-###############################################################################
+################################################################################
 def Fetch_ECEI_d3d(channel_path, shot_number, c = None, verbose = False):
     """
     Basic fetch ecei data function, uses MDSplus Connection objects and looks
     for data in all the locations we know of.
 
     Args:
-        channel_path: str, path to save .txt file (channel folder, format LFSxxxx)
+        channel_path: str, path to save .txt file (channel folder, format 
+                      "LFSxxxx")
         shot_number: int, DIII-D shot number
         c: MDSplus.Connection object. None by default
         verbose: bool, suppress print statements
@@ -109,8 +110,9 @@ def Fetch_ECEI_d3d(channel_path, shot_number, c = None, verbose = False):
     return None, None, None, False
 
 
-def Download_Shot(shot_num_queue, c, n_shots, n_procs, channel_paths, sentinel = -1,\
-                  verbose = False, d_sample = 1, try_again = False):
+def Download_Shot(shot_num_queue, c, n_shots, n_procs, channel_paths,\
+                  sentinel = -1, verbose = False, d_sample = 1,\
+                  try_again = False):
     """
     Accepts a multiprocessor queue of shot numbers and downloads/saves data for
     a single shot off the front of the queue.
@@ -149,7 +151,8 @@ def Download_Shot(shot_num_queue, c, n_shots, n_procs, channel_paths, sentinel =
                     for key in f.keys():
                         if key == channel:
                             success = True
-                        if key.startswith('missing') and key.endswith(channel) and not try_again:
+                        if key.startswith('missing') and key.endswith(channel)\
+                           and not try_again:
                             success = True
                     f.close()
                 else:
@@ -178,8 +181,8 @@ def Download_Shot(shot_num_queue, c, n_shots, n_procs, channel_paths, sentinel =
                         if d_sample > 1:
                             n = int(math.log10(d_sample))
                             for _ in range(n):
-                                data_two_column = scipy.signal.decimate(data_two_column,\
-                                                  10, axis = 0)
+                                data_two_column = scipy.signal.decimate(\
+                                                  data_two_column, 10, axis = 0)
                         f = h5py.File(save_path, 'r+')
                         for key in f.keys():
                             if key.startswith('missing'):
@@ -196,7 +199,8 @@ def Download_Shot(shot_num_queue, c, n_shots, n_procs, channel_paths, sentinel =
                                 f.close()
                                 already = True
                         if not already:
-                            dset = f.create_dataset(dsetk, data = np.array([-1.0]))
+                            dset = f.create_dataset(dsetk,\
+                                                    data = np.array([-1.0]))
                             f.close()
 
                 except BaseException:
@@ -212,8 +216,10 @@ def Download_Shot(shot_num_queue, c, n_shots, n_procs, channel_paths, sentinel =
                 missing_shots += 1
             chan_done += 1
             shot_prog = chan_done/160
-            overall_prog = shots_progress + (shots_progress_next-shots_progress)*shot_prog
-            print('Approximate download progress: {:.2f}%.'.format(overall_prog))
+            overall_prog = shots_progress +\
+                           (shots_progress_next-shots_progress)*shot_prog
+            print('Approximate download progress: {:.2f}%.'\
+                  .format(overall_prog))
 
     print('Finished with {} channel signals missing.'.format(missing_shots))
     return
@@ -276,24 +282,27 @@ def Count_Missing(shot_list, shot_path, missing_path):
     print("Generating report for {} shots between shots {} and {}".format(\
            np.shape(shot_list)[0], int(shot_list[min_shot]),\
            int(shot_list[max_shot])))
-    report = open(missing_path+'/missing_report_'+str(int(shot_list[min_shot]))+'-'+\
-                  str(int(shot_list[max_shot]))+'.txt', mode = 'w',\
+    report = open(missing_path+'/missing_report_'+str(int(shot_list[min_shot]))\
+                  +'-'+str(int(shot_list[max_shot]))+'.txt', mode = 'w',\
                   encoding='utf-8')
-    report.write('Missing channel signals for download from shot {} to shot {}:\n'.\
-                  format(int(shot_list[min_shot]), int(shot_list[max_shot])))
+    report.write('Missing channel signals for download from shot {} to shot '\
+                 '{}:\n'.format(int(shot_list[min_shot]),\
+                                int(shot_list[max_shot])))
     for filename in os.listdir(shot_path):
         if filename.endswith('hdf5'):
-            if int(filename[:-5]) >= shot_list[min_shot] and int(filename[:-5]) <=\
-                                                             shot_list[max_shot]:
+            if int(filename[:-5]) >= shot_list[min_shot]\
+            and int(filename[:-5]) <= shot_list[max_shot]:
                 f = h5py.File(shot_path+'/'+filename, 'r')
                 count = 0
                 for key in f.keys():
                     if key.startswith('missing'):
                         count += 1
-                        report.write('Channel '+key[-5:-1]+', shot #'+filename[:-5]+'\n')
+                        report.write('Channel '+key[-5:-1]+', shot #'+\
+                                     filename[:-5]+'\n')
                         num_shots_miss +=1
                 if count > 160:
-                    print('Shot #'+filename[:-5]+' has more than 160 channels missing!')
+                    print('Shot #'+filename[:-5]+' has more than 160 channels '\
+                          'missing!')
 
     report.write('Missing channel signals for {} out of {} signals.'.\
                   format(num_shots_miss, num_shots))
@@ -393,8 +402,9 @@ class ECEI:
         """
         Removes all signal files in the save_path directory.
         """
-        check = input("WARNING: this function will delete ALL signal files in the "+\
-                "designated save path. Type 'yes' to continue, anything else to cancel.\n")
+        check = input("WARNING: this function will delete ALL signal files in \
+                the "+"designated save path. Type 'yes' to continue, anything \
+                else to cancel.\n")
         if check == 'yes':
             for filename in os.listdir(save_path):
                 if filename.endswith('hdf5'):
@@ -404,11 +414,13 @@ class ECEI:
 
     def Clean_Missing_Signals(self, missing_path, save_path = os.getcwd()):
         """
-        Removes all signal files with all channels missing in the save_path directory.
+        Removes all signal files with all channels missing in the save_path 
+        directory.
         """
-        check = input("WARNING: this function will delete ALL signal files in the "+\
-                      "designated save path which have all channel signals missing. "+\
-                      "Type 'yes' to continue, anything else to cancel.\n")
+        check = input("WARNING: this function will delete ALL signal files in "\
+                      "the designated save path which have all channel signals"\
+                      " missing. Type 'yes' to continue, anything else to "\
+                      "cancel.\n")
         report = open(missing_path+'/AllChannelsMissing.txt', mode = 'w',\
                   encoding='utf-8')
         if check == 'yes':
@@ -536,8 +548,8 @@ class ECEI:
                 shot_count += 1
                 f.close()
                 if shot_count%10 == 0:
-                    print("{:.2f}% of the way through collecting missing shot info."\
-                          .format(shot_count/num_shots*100))
+                    print("{:.2f}% of the way through collecting missing shot "\
+                          "info.".format(shot_count/num_shots*100))
 
         t_e = time.time()
         T = t_e-t_b
@@ -545,24 +557,25 @@ class ECEI:
         print("Finished collecting info in {} seconds.".format(T))
 
         # Write report
-        report = open(output_path+'/missing_signal_report_'+todays_date+'.txt', 'w')
-        report.write('This missing shot report was generated using the contents of '+
-                     output_path+' on '+todays_date+'.\n\n')
+        report = open(output_path+'/missing_signal_report_'+todays_date+'.txt',\
+                      'w')
+        report.write('This missing shot report was generated using the \
+                     contents of '+output_path+' on '+todays_date+'.\n\n')
         report.write('Number of shots with NO channels missing: {}\n'.format(\
                      int(none_missing)))
         report.write('Number of shots with ALL channels missing: {}\n'.format(\
                      int(all_missing)))
-        report.write('Number of shots with just one channel missing: {}\n'.format(\
-                     int(one_missing)))
+        report.write('Number of shots with just one channel missing: {}\n'\
+                     .format(int(one_missing)))
         report.write('Number of shots with 8 channels missing: {}\n'.format(\
                      int(eight_missing)))
         report.write('Number of shots with 16 channels missing: {}\n'.format(\
                      int(sixteen_missing)))
-        report.write('Number of shots with 2 to 15 channels missing: {}\n'.format(\
-                     int(one_to_sixteen_missing)))
-        report.write('Number of shots with 17 to 159 channels missing: {}\n\n'.format(\
-                     int(sixteen_to_all_missing)))
-        report.write('Missing signal distribution by channel in shots with '+
+        report.write('Number of shots with 2 to 15 channels missing: {}\n'\
+                     .format(int(one_to_sixteen_missing)))
+        report.write('Number of shots with 17 to 159 channels missing: {}\n\n'\
+                     .format(int(sixteen_to_all_missing)))
+        report.write('Missing signal distribution by channel in shots with '+\
                      'fewer than 160 channels missing:\n')
         missing_chan_tot = 0
         most_miss = 0
@@ -585,9 +598,12 @@ class ECEI:
         some_missing_list = np.sort(some_missing_list)
         full_shot_list = np.sort(full_shot_list)
 
-        np.savetxt(output_path+'/all_channels_missing_list.txt', all_missing_list, fmt='%i')
-        np.savetxt(output_path+'/some_channels_missing_list.txt', some_missing_list, fmt='%i')
-        np.savetxt(output_path+'/no_channels_missing_list.txt', full_shot_list, fmt='%i')
+        np.savetxt(output_path+'/all_channels_missing_list.txt',\
+                   all_missing_list, fmt='%i')
+        np.savetxt(output_path+'/some_channels_missing_list.txt',\
+                   some_missing_list, fmt='%i')
+        np.savetxt(output_path+'/no_channels_missing_list.txt', full_shot_list,\
+                   fmt='%i')
 
 
     def Generate_Quality_Report(self, todays_date, data_path, disrupt_list,\
@@ -632,8 +648,7 @@ class ECEI:
                     # First we check for NaNs
                     for key in keys:
                         data = np.asarray(f.get(key))
-                        d_sum = np.sum(np.sum(data))
-                        if np.isnan(d_sum):
+                        if np.any(np.isnan(data)):
                             if shot_no not in contains_NaN:
                                 contains_NaN[shot_no] = []
                             contains_NaN[shot_no].append(key[-5:-1])
@@ -650,15 +665,17 @@ class ECEI:
                                 missing_chans[shot_no] = []
                             missing_chans[shot_no].append(key[-5:-1])
                         # Now we check if data is collected up to t_disrupt
-                        if shot_no in disrupt_list[:,0] and not key.startswith('missing'):
-                            i_disrupt = np.where(disrupt_list[:,0]==shot_no)[0][0]
+                        if shot_no in disrupt_list[:,0] and\
+                           not key.startswith('missing'):
+                            i_disrupt=np.where(disrupt_list[:,0]==shot_no)[0][0]
                             t_max = np.max(data[:,0])
                             t_disrupt = disrupt_list[i_disrupt,1]
                             if t_max < t_disrupt:
                                 if shot_no not in ends_before_t_disrupt:
                                     ends_before_t_disrupt[shot_no] = []
                                 ends_before_t_disrupt[shot_no].append(key[-5:-1])
-                    print("{:2f}% of the way through shot files".format(count/num_files*100))
+                    print("{:2f}% of the way through shot files"\
+                          .format(count/num_files*100))
                     f.close()
 
         t_e = time.time()
@@ -667,17 +684,18 @@ class ECEI:
         print("Finished collecting info in {} seconds.".format(T))
 
         # Write report
-        report = open(output_path+'/data_quality_report_'+todays_date+'.txt', 'w')
-        report.write('This data quality report was generated using the contents of '+
-                     output_path+'\non '+todays_date+', using a shotlist named "'+\
-                     shotlist_name+'".\n\n')
+        report = open(output_path+'/data_quality_report_'+todays_date+'.txt',\
+                      'w')
+        report.write('This data quality report was generated using the '\
+                     'contents of '+output_path+'\non '+todays_date+', using '\
+                     'a shotlist named "'+shotlist_name+'".\n\n')
 
         report.write('Number of shots with NaNs present: {}\n'.format(\
                      int(len(contains_NaN))))
         if len(contains_NaN) > 0:
             for shot in contains_NaN:
-                report.write('Shot {} Contains NaNs in the following channels:\n'.\
-                             format(shot))
+                report.write('Shot {} Contains NaNs in the following '\
+                             'channels:\n'.format(shot))
                 count = 0
                 for i in range(len(contains_NaN[shot])):
                     count += 1
@@ -689,12 +707,12 @@ class ECEI:
 
         report.write('_'*80)
         report.write('\n\n')
-        report.write('Number of shots that cease data collection before t_disrupt: {}\n'.format(\
-                     int(len(ends_before_t_disrupt))))
+        report.write('Number of shots that cease data collection before '\
+                     't_disrupt: {}\n'.format(int(len(ends_before_t_disrupt))))
         if len(ends_before_t_disrupt) > 0:
             for shot in ends_before_t_disrupt:
-                report.write('Shot {} stops short of t_disrupt in the following channels:\n'.\
-                             format(shot))
+                report.write('Shot {} stops short of t_disrupt in the '\
+                             'following channels:\n'.format(shot))
                 count = 0
                 for i in range(len(ends_before_t_disrupt[shot])):
                     count += 1
@@ -706,12 +724,12 @@ class ECEI:
 
         report.write('_'*80)
         report.write('\n\n')
-        report.write('Number of shots that have a standard deviation which is smaller than 1 mV: {}\n'.format(\
-                     int(len(low_std_dev))))
+        report.write('Number of shots that have a standard deviation which is '\
+                     'smaller than 1 mV: {}\n'.format(int(len(low_std_dev))))
         if len(low_std_dev) > 0:
             for shot in low_std_dev:
-                report.write('Shot {} has a std. dev less than 1 mV in the following channels:\n'.\
-                             format(shot))
+                report.write('Shot {} has a std. dev less than 1 mV in the '\
+                             'following channels:\n'.format(shot))
                 count = 0
                 for i in range(len(low_std_dev[shot])):
                     count += 1
@@ -727,8 +745,8 @@ class ECEI:
                      int(len(missing_chans))))
         if len(missing_chans) > 0:
             for shot in missing_chans:
-                report.write('Shot {} is missing data in the following channels:\n'.\
-                             format(shot))
+                report.write('Shot {} is missing data in the following '\
+                             'channels:\n'.format(shot))
                 count = 0
                 for i in range(len(missing_chans[shot])):
                     count += 1
@@ -744,7 +762,8 @@ class ECEI:
     ###########################################################################
     ## Visualization
     ###########################################################################
-    def Single_Shot_Plot(self, shot, data_path, save_dir = os.getcwd(), show = False):
+    def Single_Shot_Plot(self, shot, data_path, save_dir = os.getcwd(),\
+                         show = False):
         """
         Plot voltage traces for a single shot, saves plot as a .pdf
 
@@ -767,7 +786,8 @@ class ECEI:
             col = plot_no%5
             if channel in f.keys():
                 data = f.get(channel)
-                ax[row,col].plot(data[:,0], data[:,1], label = 'YY = '+channel[-3:-1],\
+                ax[row,col].plot(data[:,0], data[:,1],\
+                                 label = 'YY = '+channel[-3:-1],\
                                  linewidth = 0.4, alpha = 0.8)
             if count%8 == 0:
                 plot_no += 1
@@ -828,7 +848,8 @@ class ECEI:
             save_dir: str, directory where shot files are stored
         """
         shot = int(input("Which shot? Enter an integer.\n"))
-        channel = input("Which channel? format 'XXYY', 03<=XX<=22, 01<=YY<=08.\n")
+        channel = input("Which channel? format 'XXYY', 03<=XX<=22, 01<=YY<=08"\
+                        ".\n")
 
         self.Generate_Txt(shot, channel, save_dir)
 
@@ -889,15 +910,16 @@ class ECEI:
         t_e = time.time()
         T = t_e-t_b
 
-        print("Downloaded {} out of {} signals in {} seconds.".format(missed[1]-missed[0],\
-               missed[1], T))
+        print("Downloaded {} out of {} signals in {} seconds."\
+              .format(missed[1]-missed[0], missed[1], T))
 
         return
 
 
-    def Acquire_Shot_Sequence_D3D(self, shots, shot_1, clear_file, disrupt_file,\
-                                  save_path = os.getcwd(), max_cores = 8,\
-                                  verbose = False, chan_lowlim = 3, chan_uplim = 22,\
+    def Acquire_Shot_Sequence_D3D(self, shots, shot_1, clear_file,\
+                                  disrupt_file, save_path = os.getcwd(),\
+                                  max_cores = 8, verbose = False,\
+                                  chan_lowlim = 3, chan_uplim = 22,\
                                   d_sample = 1, try_again = False):
         """
         Accepts a desired number of non-disruptive shots, then downloads all

@@ -8,12 +8,7 @@ Jesse A Rodriguez, 06/28/2021
 
 import numpy as np
 import matplotlib as mpl
-#mpl.rcParams['figure.dpi']=10
 import matplotlib.pyplot as plt
-#plt.rc('font', family='tahoma')
-#font = 1
-#plt.rc('xtick', labelsize=font)
-#plt.rc('ytick', labelsize=font)
 import time
 import sys
 import os
@@ -30,6 +25,45 @@ except ImportError:
 ################################################################################
 ## Utility Functions and Globals
 ################################################################################
+def downsample_signal(signal, orig_sample_rate, decimation_factor,\
+                        time = np.array([])):
+    """
+    Downsample a given signal from original sample rate to target sample rate,
+    using a Kaiser window with beta = 3 and 12 taps. If your decimation factor
+    is greater than 10, I'd recommend applying this function several times 
+    successively. Furthermore, if your decimation factor is lower than 6, the
+    output will be delayed by more than one time-step at the target sample rate.
+    This downsampling procedure is strictly causal.
+                                    
+    Parameters:
+        signal (numpy.array): The input signal
+        time (np.array): Input time series
+        orig_sample_rate (float): Original sampling rate (Hz)
+        decimation_factor (float): factor by which you want to downsample
+                                                            
+    Returns:
+        numpy.arrays: The downsampled signal and time series
+    """
+    # Calculate decimation factor
+    target_sample_rate = orig_sample_rate/decimation_factor
+    
+    # Calculate filter coefficients
+    filter_coeffs = scipy.signal.firwin(12, target_sample_rate,\
+                        window = ('kaiser',3), fs = orig_sample_rate)
+
+    # Apply the low-pass filter using lfilter to maintain strict causality
+    filtered_signal = scipy.signal.lfilter(filter_coeffs, [1.0], signal)
+                  
+    # Decimate the filtered signal
+    downsampled_signal = filtered_signal[::decimation_factor]
+    if time.shape[0] > 0:
+        time_ds = time[::decimation_factor]
+    else:
+        time_ds = np.array([])
+                                                          
+    return downsampled_signal, time_ds
+
+
 def Fetch_ECEI_d3d(channel_path, shot_number, c = None, verbose = False):
     """
     Basic fetch ecei data function, uses MDSplus Connection objects and looks
@@ -139,6 +173,7 @@ def Download_Shot(shot_num_queue, c, n_shots, n_procs, channel_paths,\
         if shot_num == sentinel:
             break
         shot_complete = True
+        time_entered = False
         chan_done = 0
         for channel_path in channel_paths:
             save_path = channel_path[:-9]+'{}.hdf5'.format(int(shot_num))
@@ -154,6 +189,8 @@ def Download_Shot(shot_num_queue, c, n_shots, n_procs, channel_paths,\
                         if key.startswith('missing') and key.endswith(channel)\
                            and not try_again:
                             success = True
+                        if key == 'time':
+                            time_entered = True
                     f.close()
                 else:
                     print('Shot {} '.format(int(shot_num)),'was downloaded \
@@ -177,18 +214,23 @@ def Download_Shot(shot_num_queue, c, n_shots, n_procs, channel_paths,\
                         success = False
 
                     if success:
-                        data_two_column = np.vstack((time, data)).transpose()
+                        data_ = np.array(data)
+                        time_ = np.array(time)
                         if d_sample > 1:
+                            fs_start = 1/(time[1]-time[0])
                             n = int(math.log10(d_sample))
                             for _ in range(n):
-                                data_two_column = scipy.signal.decimate(\
-                                                  data_two_column, 10, axis = 0)
+                                data_, time_ = downsample_signal(data_, fs_start,\
+                                                10, time_)
+                                fs_start = fs_start/10
                         f = h5py.File(save_path, 'r+')
                         for key in f.keys():
                             if key.startswith('missing'):
                                 if key[8:] == channel:
                                     del f[key]
-                        dset = f.create_dataset(channel, data = data_two_column)
+                        if not time_entered:
+                            dset_t = f.create_dataset('time', data = time_)
+                        dset = f.create_dataset(channel, data = data_)
                         f.close()
                     else:
                         f = h5py.File(save_path, 'r+')
@@ -315,12 +357,13 @@ def Count_Missing(shot_list, shot_path, missing_path):
 ## ECEI Class
 ###############################################################################
 class ECEI:
-    def __init__(self):
+    def __init__(self, server = 'atlas.gat.com'):
         """
         Initialize ECEI object by creating an internal list of channel keys.
 
         Args:
         """
+        self.server = server
         self.ecei_channels = []
         for i in range(20):
             for j in range(8):
@@ -520,11 +563,12 @@ class ECEI:
                 f = h5py.File(data_path+'/'+filename, 'r')
                 miss_count = 0
                 for key in f.keys():
-                    if key[-9:] not in missing_by_chan:
-                        missing_by_chan[key[-9:]] = 0
-                    if key.startswith('missing'):
-                        miss_count += 1
-                        missing_by_chan[key[-9:]] += 1
+                    if key != 'time':
+                        if key[-9:] not in missing_by_chan:
+                            missing_by_chan[key[-9:]] = 0
+                        if key.startswith('missing'):
+                            miss_count += 1
+                            missing_by_chan[key[-9:]] += 1
                 if miss_count == 160:
                     all_missing += 1
                     for key in f.keys():
@@ -863,8 +907,7 @@ class ECEI:
                           max_cores = 8, verbose = False, chan_lowlim = 3,\
                           chan_uplim = 22, d_sample = 1, try_again = False):
         """
-        Accepts a list of shot numbers and downloads the data, saving them into
-        folders corresponding to the individual channels. Returns nothing. 
+        Accepts a list of shot numbers and downloads the data. Returns nothing.
         Shots are saved in hdf5 format, downsampling is done BEFORE saving. 
         Each channel is labelled within its own dataset in the hdf5 file, where 
         the label is the channel name/MDS point name, e.g. '"LFSXXYY"'. If data
@@ -883,7 +926,7 @@ class ECEI:
                        found to be missing in a prior run.
         """
         t_b = time.time()
-        # Construct channel save paths and create them if needed.
+        # Construct channel save paths.
         channel_paths = []
         for i in range(len(self.ecei_channels)):
             XX = int(self.ecei_channels[i][-5:-3])
@@ -896,13 +939,14 @@ class ECEI:
             os.mkdir(missing_path)
 
         try:
-            c = MDS.Connection('atlas.gat.com')
+            print("Connecting to MDSplus...")
+            c = MDS.Connection(self.server)
         except Exception as e:
             print(e)
             return False
 
         Download_Shot_List(shot_numbers, channel_paths, max_cores = max_cores,\
-                           server = 'atlas.gat.com', verbose = verbose,\
+                           server = self.server, verbose = verbose,\
                            d_sample = d_sample, try_again = try_again)
 
         missed = Count_Missing(shot_numbers, save_path, missing_path)

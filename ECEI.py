@@ -603,8 +603,8 @@ class ECEI:
         # Write report
         report = open(output_path+'/missing_signal_report_'+todays_date+'.txt',\
                       'w')
-        report.write('This missing shot report was generated using the \
-                     contents of '+output_path+' on '+todays_date+'.\n\n')
+        report.write('This missing shot report was generated using the '+\
+                     'contents of '+output_path+' on '+todays_date+'.\n\n')
         report.write('Number of shots with NO channels missing: {}\n'.format(\
                      int(none_missing)))
         report.write('Number of shots with ALL channels missing: {}\n'.format(\

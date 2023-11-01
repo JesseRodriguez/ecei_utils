@@ -18,6 +18,15 @@ import h5py
 import scipy.signal
 import math
 try:
+    import toksearch as ts
+    tksrch = True
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["NUMEXPR_NUM_THREADS"] = "1"
+    os.environ["OMP_NUM_THREADS"] = "1"
+except ImportError:
+    tksrch = False
+    pass
+try:
     import MDSplus as MDS
 except ImportError:
     pass
@@ -304,6 +313,48 @@ def Download_Shot_List(shot_numbers, channel_paths, max_cores = 8,\
         p.start()
     for p in processes:
         p.join()
+
+
+def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1): 
+    # Initialize the toksearch pipeline
+    pipe = ts.Pipeline(shots)
+
+    # Fetch signals for these 32 channels
+    for channel in channels:
+        pipe.fetch(channel, PtDataSignal(channel))
+
+    # Function to process and write to HDF5
+    @pipe.map
+    # Get the shot ID from the record
+    shot_id = rec['shot']  # Implement function to get shot ID
+    hdf5_path = savepath+f'/{shot_id}.hdf5'
+    def process_and_save(rec):
+        for channel in channels:
+            data = rec[channel]['data']
+            time = rec[channel]['times']
+            fs_start = time1/(time[1]-time[0])
+            n = int(math.log10(d_sample))
+            for _ in range(n):
+                data, time = downsample_signal(data, fs_start, 10, time)
+                fs_start = fs_start/10
+
+            with h5py.File(hdf5_path, 'a') as f:  # 'a' for append mode
+                # Save channel-specific data
+                if channel not in f:
+                    f.create_dataset(channel, data=data)
+                else:
+                    print('Channel {}, shot {} '.format(channel[-5:-1],\
+                       int(shot_id)),'has already been downloaded.')
+
+                # Save single time series database
+                if 'time' not in f:
+                    f.create_dataset('time', data=time)
+
+    # Discard data from pipeline
+    pipe.keep([])
+
+    # Fetch data, limiting to 10GB per shot as per collaborator's advice
+    pipe.compute_ray(memory_per_shot=int(1.1*(10e9))
 
 
 def Count_Missing(shot_list, shot_path, missing_path):

@@ -321,14 +321,14 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1):
 
     # Fetch signals for these 32 channels
     for channel in channels:
-        pipe.fetch(channel, PtDataSignal(channel))
+        pipe.fetch(channel, ts.PtDataSignal(channel))
 
     # Function to process and write to HDF5
     @pipe.map
-    # Get the shot ID from the record
-    shot_id = rec['shot']  # Implement function to get shot ID
-    hdf5_path = savepath+f'/{shot_id}.hdf5'
     def process_and_save(rec):
+        # Get the shot ID from the record
+        shot_id = rec['shot']
+        hdf5_path = savepath+f'/{shot_id}.hdf5'
         for channel in channels:
             data = rec[channel]['data']
             time = rec[channel]['times']
@@ -354,7 +354,7 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1):
     pipe.keep([])
 
     # Fetch data, limiting to 10GB per shot as per collaborator's advice
-    pipe.compute_ray(memory_per_shot=int(1.1*(10e9))
+    pipe.compute_ray(memory_per_shot=int(1.1*(10e9)))
 
 
 def Count_Missing(shot_list, shot_path, missing_path):
@@ -956,7 +956,8 @@ class ECEI:
     ###########################################################################
     def Acquire_Shots_D3D(self, shot_numbers, save_path = os.getcwd(),\
                           max_cores = 8, verbose = False, chan_lowlim = 3,\
-                          chan_uplim = 22, d_sample = 1, try_again = False):
+                          chan_uplim = 22, d_sample = 1, try_again = False,\
+                          tksrch = False):
         """
         Accepts a list of shot numbers and downloads the data. Returns nothing.
         Shots are saved in hdf5 format, downsampling is done BEFORE saving. 
@@ -979,24 +980,30 @@ class ECEI:
         t_b = time.time()
         # Construct channel save paths.
         channel_paths = []
+        channels = []
         for i in range(len(self.ecei_channels)):
             XX = int(self.ecei_channels[i][-5:-3])
             if XX >= chan_lowlim and XX <= chan_uplim:
                 channel_path = os.path.join(save_path, self.ecei_channels[i])
                 channel_paths.append(channel_path)
+                channels.append(self.ecei_channels[i])
         #Missing shots directory
         missing_path = os.path.join(save_path, 'missing_shot_info')
         if not os.path.exists(missing_path):
             os.mkdir(missing_path)
 
-        try:
-            print("Connecting to MDSplus...")
-            c = MDS.Connection(self.server)
-        except Exception as e:
-            print(e)
-            return False
+        if tksrch:
+            Download_Shot_List_toksearch(shot_numbers, channels, save_path,\
+                    d_sample = d_sample)
+        else:
+            try:
+                print("Connecting to MDSplus...")
+                c = MDS.Connection(self.server)
+            except Exception as e:
+                print(e)
+                return False
 
-        Download_Shot_List(shot_numbers, channel_paths, max_cores = max_cores,\
+            Download_Shot_List(shot_numbers, channel_paths, max_cores = max_cores,\
                            server = self.server, verbose = verbose,\
                            d_sample = d_sample, try_again = try_again)
 

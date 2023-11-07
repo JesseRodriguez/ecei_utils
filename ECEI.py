@@ -73,6 +73,14 @@ def downsample_signal(signal, orig_sample_rate, decimation_factor,\
     return downsampled_signal, time_ds
 
 
+def check_file(hdf5_path):
+    if os.path.exists(hdf5_path):
+        file_size = os.path.getsize(hdf5_path)
+        print(f"File {hdf5_path} exists. Size: {file_size} bytes.")
+    else:
+        print(f"File {hdf5_path} does not exist.")
+
+
 def Fetch_ECEI_d3d(channel_path, shot_number, c = None, verbose = False):
     """
     Basic fetch ecei data function, uses MDSplus Connection objects and looks
@@ -315,45 +323,62 @@ def Download_Shot_List(shot_numbers, channel_paths, max_cores = 8,\
         p.join()
 
 
-def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1): 
+def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
+                                 verbose = False): 
     # Initialize the toksearch pipeline
     pipe = ts.Pipeline(shots)
 
     # Fetch signals for these 32 channels
     for channel in channels:
-        pipe.fetch(channel, ts.PtDataSignal(channel))
+        try:
+            pipe.fetch(channel[1:-1], ts.PtDataSignal(channel[1:-1]))
+        except Exception as e:
+            print(f"An error occurred: {e}")
 
     # Function to process and write to HDF5
     @pipe.map
     def process_and_save(rec):
         # Get the shot ID from the record
         shot_id = rec['shot']
+        if np.random.uniform() < 1/100:
+            print(f"Working on shot {shot_id}. This job runs from {shots[0]}-{shots[len(shots)-1]}.")
         hdf5_path = savepath+f'/{shot_id}.hdf5'
         for channel in channels:
-            data = rec[channel]['data']
-            time = rec[channel]['times']
-            fs_start = time1/(time[1]-time[0])
-            n = int(math.log10(d_sample))
-            for _ in range(n):
-                data, time = downsample_signal(data, fs_start, 10, time)
-                fs_start = fs_start/10
-
             with h5py.File(hdf5_path, 'a') as f:  # 'a' for append mode
-                # Save channel-specific data
                 if channel not in f:
-                    f.create_dataset(channel, data=data)
+                    try:
+                        data = rec[channel[1:-1]]['data']
+                        time = rec[channel[1:-1]]['times']
+                        fs_start = 1/(time[1]-time[0])
+                        n = int(math.log10(d_sample))
+                        for _ in range(n):
+                            data, time = downsample_signal(data, fs_start, 10, time)
+                            fs_start = fs_start/10
+                    except Exception as e:
+                        if verbose:
+                            print(f"An error occurred in channel {channel}, shot {shot_id}: {e}")
+
+                    # Save channel-specific data
+                    if rec[channel[1:-1]] is None:
+                        f.create_dataset('missing_'+channel, data = np.array([-1.0]))
+                    else:
+                        f.create_dataset(channel, data=data)
+                        # Save single time series database
+                        if 'time' not in f:
+                            f.create_dataset('time', data=time)
                 else:
-                    print('Channel {}, shot {} '.format(channel[-5:-1],\
-                       int(shot_id)),'has already been downloaded.')
+                    if verbose:
+                        print('Channel {}, shot {} '.format(channel[-5:-1],\
+                            int(shot_id)),'has already been downloaded.')
 
-                # Save single time series database
-                if 'time' not in f:
-                    f.create_dataset('time', data=time)
-
+                f.flush()
+    
     # Discard data from pipeline
     pipe.keep([])
 
     # Fetch data, limiting to 10GB per shot as per collaborator's advice
+    #results = list(pipe.compute_serial())
+    #results = list(pipe.compute_spark())
     pipe.compute_ray(memory_per_shot=int(1.1*(10e9)))
 
 
@@ -994,7 +1019,7 @@ class ECEI:
 
         if tksrch:
             Download_Shot_List_toksearch(shot_numbers, channels, save_path,\
-                    d_sample = d_sample)
+                    d_sample = d_sample, verbose = verbose)
         else:
             try:
                 print("Connecting to MDSplus...")

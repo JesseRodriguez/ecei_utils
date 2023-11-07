@@ -13,6 +13,7 @@ import time
 import sys
 import os
 import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 import h5py
 import scipy.signal
@@ -20,9 +21,6 @@ import math
 try:
     import toksearch as ts
     tksrch = True
-    os.environ["MKL_NUM_THREADS"] = "1"
-    os.environ["NUMEXPR_NUM_THREADS"] = "1"
-    os.environ["OMP_NUM_THREADS"] = "1"
 except ImportError:
     tksrch = False
     pass
@@ -726,6 +724,151 @@ class ECEI:
                    fmt='%i')
 
 
+    def Generate_Missing_Report_Parallel(self, todays_date,\
+            data_path = os.getcwd(), output_path = os.getcwd()):
+        """
+        Creates a report of missing data in a more readable format.
+
+        Args:
+            todays_date: str, todays date in a readable, filename-friendly
+                         format, like "MM-DD-YYYY"
+            data_path: str, path where data files are stored
+            output_path: str, path where the report will go
+        """
+        def process_file(filename, data_path):
+            if np.random.uniform() < 1/100:
+                print("Processing "+filename)
+            # Process each file to determine missing channels and return counts
+            with h5py.File(os.path.join(data_path, filename), 'r') as f:
+                miss_count = sum('missing' in key for key in f.keys())
+                missing_by_chan = {key[-9:]: 'missing' in key for key in f.keys() if key != 'time'}
+
+            # Return a dictionary of results for this file
+            return {
+                'filename': filename,
+                'miss_count': miss_count,
+                'missing_by_chan': missing_by_chan
+            }
+
+        def reduce_results(results):
+            # Reduce/combine results from all processed files
+            combined = {
+                'none_missing': 0,
+                'all_missing': 0,
+                'one_missing': 0,
+                'eight_missing': 0,
+                'sixteen_missing': 0,
+                'one_to_sixteen_missing': 0,
+                'sixteen_to_all_missing': 0,
+                'missing_by_chan': {},
+                'all_missing_list': [],
+                'some_missing_list': [],
+                'full_shot_list': []
+            }
+
+            for result in results:
+                miss_count = result['miss_count']
+                if miss_count == 160:
+                    combined['all_missing'] += 1
+                    combined['all_missing_list'].append(result['filename'][:-5])
+                elif miss_count == 0:
+                    combined['none_missing'] += 1
+                    combined['full_shot_list'].append(result['filename'][:-5])
+                elif 1 < miss_count < 16:
+                    combined['one_to_sixteen_missing'] += 1
+                    combined['some_missing_list'].append(result['filename'][:-5])
+                elif 16 < miss_count < 160:
+                    combined['sixteen_to_all_missing'] += 1
+                    combined['some_missing_list'].append(result['filename'][:-5])
+                elif miss_count == 1:
+                    combined['one_missing'] += 1
+                    combined['some_missing_list'].append(result['filename'][:-5])
+                elif miss_count == 8:
+                    combined['eight_missing'] += 1
+                    combined['some_missing_list'].append(result['filename'][:-5])
+                elif miss_count == 16:
+                    combined['sixteen_missing'] += 1
+                    combined['some_missing_list'].append(result['filename'][:-5])
+
+                for chan, is_missing in result['missing_by_chan'].items():
+                    if chan not in combined['missing_by_chan']:
+                        combined['missing_by_chan'][chan] = 0
+                    if is_missing:
+                        combined['missing_by_chan'][chan] += 1
+
+            return combined
+
+        print("Generating concise report for the {} shots in "\
+              .format(int(num_shots))+data_path)
+        t_b = time.time()
+
+        file_list = [f for f in os.listdir(data_path) if f.endswith('.hdf5')]
+
+        with ProcessPoolExecutor() as executor:
+            # Process all files in parallel and collect results
+            results = list(executor.map(process_file, file_list, [data_path]*len(file_list)))
+
+        # Combine results outside of the parallel block
+        print("Collating Results...")
+        combined = reduce_results(results)
+
+        # Now combined_results contains all the counts and lists you need
+        t_e = time.time()
+        T = t_e-t_b
+
+        print("Finished collecting info in {} seconds.".format(T))
+
+        # Write report
+        report = open(output_path+'/missing_signal_report_'+todays_date+'.txt',\
+                      'w')
+        report.write('This missing shot report was generated using the '+\
+                     'contents of '+output_path+' on '+todays_date+'.\n\n')
+        report.write('Number of shots with NO channels missing: {}\n'.format(\
+                     int(combined['none_missing'])))
+        report.write('Number of shots with ALL channels missing: {}\n'.format(\
+                     int(combined['all_missing'])))
+        report.write('Number of shots with just one channel missing: {}\n'\
+                     .format(int(combined['one_missing'])))
+        report.write('Number of shots with 8 channels missing: {}\n'.format(\
+                     int(combined['eight_missing'])))
+        report.write('Number of shots with 16 channels missing: {}\n'.format(\
+                     int(combined['sixteen_missing'])))
+        report.write('Number of shots with 2 to 15 channels missing: {}\n'\
+                     .format(int(combined['one_to_sixteen_missing'])))
+        report.write('Number of shots with 17 to 159 channels missing: {}\n\n'\
+                     .format(int(combined['sixteen_to_all_missing'])))
+        report.write('Missing signal distribution by channel in shots with '+\
+                     'fewer than 160 channels missing:\n')
+        missing_chan_tot = 0
+        most_miss = 0
+        for key in combined['missing_by_chan']:
+            missing_chan_tot += combined['missing_by_chan'][key]
+            if combined['missing_by_chan'][key] > most_miss:
+                most_miss = combined['missing_by_chan'][key]
+
+        for i in range(20):
+            for j in range(8):
+                key = '"LFS{:02d}{:02d}"'.format(i+3, j+1)
+                bar_length = int(combined['missing_by_chan'][key]/most_miss*50)
+                bar = '█'*bar_length
+                report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
+                        str(int(combined['missing_by_chan'][key]))+' | '+bar+'\n')
+
+        report.close()
+
+        all_missing_list = np.sort(combined['all_missing_list'])
+        some_missing_list = np.sort(combined['some_missing_list'])
+        full_shot_list = np.sort(combined['full_shot_list'])
+
+        np.savetxt(output_path+'/all_channels_missing_list.txt',\
+                   all_missing_list, fmt='%i')
+        np.savetxt(output_path+'/some_channels_missing_list.txt',\
+                   some_missing_list, fmt='%i')
+        np.savetxt(output_path+'/no_channels_missing_list.txt', full_shot_list,\
+                   fmt='%i')
+
+
+
     def Generate_Quality_Report(self, todays_date, data_path, disrupt_list,\
                                 shots_of_interest, shotlist_name, output_path =\
                                 os.getcwd()):
@@ -1018,6 +1161,9 @@ class ECEI:
             os.mkdir(missing_path)
 
         if tksrch:
+            os.environ["MKL_NUM_THREADS"] = "1"
+            os.environ["NUMEXPR_NUM_THREADS"] = "1"
+            os.environ["OMP_NUM_THREADS"] = "1"
             Download_Shot_List_toksearch(shot_numbers, channels, save_path,\
                     d_sample = d_sample, verbose = verbose)
         else:

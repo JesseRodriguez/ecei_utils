@@ -79,6 +79,73 @@ def check_file(hdf5_path):
         print(f"File {hdf5_path} does not exist.")
 
 
+def process_file(filename, data_path):
+    """
+    Single step for reading out missing channel information from a single ECEI
+    data file stored as an .hdf5.
+    """
+    if np.random.uniform() < 1/100:
+        print("Processing "+filename)
+    # Process each file to determine missing channels and return counts
+    try:
+        with h5py.File(os.path.join(data_path, filename), 'r') as f:
+            miss_count = sum('missing' in key for key in f.keys())
+            missing_by_chan = {key[-9:]: 'missing' in key for key in f.keys() if key != 'time'}
+    except:
+        miss_count = 160
+        missing_by_chan = {'read failure': None}
+
+    # Return a dictionary of results for this file
+    return {
+        'filename': filename,
+        'miss_count': miss_count,
+        'missing_by_chan': missing_by_chan
+    }
+
+
+def process_file_quality(shot_no, data_path, disrupt_list):
+    """
+    Single step for reading out data quality information from a signle ECEI
+    data file stored as an .hdf5.
+    """
+    if np.random.uniform() < 1/25:
+        print("Processing shot no. "+str(shot_no))
+    # Process each file to determine missing channels and return counts
+    filename = str(shot_no)+".hdf5"
+    try:
+        with h5py.File(os.path.join(data_path, filename), 'r') as f:
+            NaN_by_chan = {}
+            low_sig_by_chan = {}
+            for key in f.keys():
+                if key != 'time' and not key.startswith('missing'):
+                    data = np.asarray(f.get(key))
+                    sig = np.sqrt(np.var(data))
+                    NaN_by_chan[key[-9:]] = np.any(np.isnan(data))
+                    low_sig_by_chan[key[-9:]] = (sig < 0.001)
+                elif key == 'time':
+                    time = np.asarray(f.get(key))
+                    if shot_no in disrupt_list[:,0]:
+                        i_disrupt = np.where(disrupt_list[:,0]==shot_no)[0][0]
+                        t_max = np.max(time)
+                        t_disrupt = disrupt_list[i_disrupt,1]
+                        ends = (t_max < t_disrupt)
+                    else:
+                        ends = False
+
+    except:
+        NaN_by_chan = {'read failure': None}
+        low_sig_by_chan = {'read failure': None}
+        ends = True
+
+    # Return a dictionary of results for this file
+    return {
+        'filename': filename,
+        'low_sig_by_chan': low_sig_by_chan,
+        'NaN_by_chan': NaN_by_chan,
+        'before_t_disrupt': ends
+    }
+
+
 def Fetch_ECEI_d3d(channel_path, shot_number, c = None, verbose = False):
     """
     Basic fetch ecei data function, uses MDSplus Connection objects and looks
@@ -538,8 +605,9 @@ class ECEI:
                       "the designated save path which have all channel signals"\
                       " missing. Type 'yes' to continue, anything else to "\
                       "cancel.\n")
-        report = open(missing_path+'/AllChannelsMissing.txt', mode = 'w',\
+        report = open(missing_path+'/AllChannelsMissing_removed.txt', mode = 'a',\
                   encoding='utf-8')
+        removed = 0
         if check == 'yes':
             for filename in os.listdir(save_path):
                 if filename.endswith('hdf5'):
@@ -553,6 +621,10 @@ class ECEI:
                         f.close()
                         if os.path.getsize(shot) <= 342289:
                             report.write(filename[:-5]+"\n")
+                            removed += 1
+                            if np.random.uniform() < 1/100:
+                                print("removed "+filename)
+                                print(str(removed)+" files removed so far this session.")
                             os.remove(shot)
                     else:
                         f.close()
@@ -735,21 +807,6 @@ class ECEI:
             data_path: str, path where data files are stored
             output_path: str, path where the report will go
         """
-        def process_file(filename, data_path):
-            if np.random.uniform() < 1/100:
-                print("Processing "+filename)
-            # Process each file to determine missing channels and return counts
-            with h5py.File(os.path.join(data_path, filename), 'r') as f:
-                miss_count = sum('missing' in key for key in f.keys())
-                missing_by_chan = {key[-9:]: 'missing' in key for key in f.keys() if key != 'time'}
-
-            # Return a dictionary of results for this file
-            return {
-                'filename': filename,
-                'miss_count': miss_count,
-                'missing_by_chan': missing_by_chan
-            }
-
         def reduce_results(results):
             # Reduce/combine results from all processed files
             combined = {
@@ -790,23 +847,31 @@ class ECEI:
                     combined['sixteen_missing'] += 1
                     combined['some_missing_list'].append(result['filename'][:-5])
 
-                for chan, is_missing in result['missing_by_chan'].items():
-                    if chan not in combined['missing_by_chan']:
-                        combined['missing_by_chan'][chan] = 0
-                    if is_missing:
-                        combined['missing_by_chan'][chan] += 1
+                if 'read failure' in result['missing_by_chan']:
+                    print(result['filename']+" had a read error.")
+                elif miss_count < 160:
+                    for chan, is_missing in result['missing_by_chan'].items():
+                        if chan not in combined['missing_by_chan']:
+                            combined['missing_by_chan'][chan] = 0
+                        if is_missing:
+                            combined['missing_by_chan'][chan] += 1
 
             return combined
 
+        file_list = [f for f in os.listdir(data_path) if f.endswith('.hdf5')]
+        num_shots = len(file_list)
         print("Generating concise report for the {} shots in "\
               .format(int(num_shots))+data_path)
         t_b = time.time()
 
-        file_list = [f for f in os.listdir(data_path) if f.endswith('.hdf5')]
-
+        print(f"Running on {os.cpu_count()} processes.")
         with ProcessPoolExecutor() as executor:
             # Process all files in parallel and collect results
-            results = list(executor.map(process_file, file_list, [data_path]*len(file_list)))
+            try:
+                # Process a subset of files for debugging purposes
+                results = list(executor.map(process_file, file_list, [data_path] * num_shots))
+            except Exception as e:
+                print(f"An error occurred: {e}")
 
         # Combine results outside of the parallel block
         print("Collating Results...")
@@ -856,9 +921,9 @@ class ECEI:
 
         report.close()
 
-        all_missing_list = np.sort(combined['all_missing_list'])
-        some_missing_list = np.sort(combined['some_missing_list'])
-        full_shot_list = np.sort(combined['full_shot_list'])
+        all_missing_list = np.sort(combined['all_missing_list']).astype(int)
+        some_missing_list = np.sort(combined['some_missing_list']).astype(int)
+        full_shot_list = np.sort(combined['full_shot_list']).astype(int)
 
         np.savetxt(output_path+'/all_channels_missing_list.txt',\
                    all_missing_list, fmt='%i')
@@ -1022,6 +1087,140 @@ class ECEI:
         report.close()
 
 
+    def Generate_Quality_Report_Parallel(self, todays_date, disrupt_list,\
+            shot_list, data_path = os.getcwd(), output_path = os.getcwd()):
+        """
+        Creates a report of missing data in a more readable format.
+
+        Args:
+            todays_date: str, todays date in a readable, filename-friendly
+                         format, like "MM-DD-YYYY"
+            data_path: str, path where data files are stored
+            output_path: str, path where the report will go
+        """
+        def reduce_results(results):
+            # Reduce/combine results from all processed files
+            combined = {
+                'low_sig_by_chan': {},
+                'low_sig_list': [],
+                'NaN_by_chan': {},
+                'NaN_list': [],
+                't_disrupt_list': []
+            }
+
+            for result in results:
+                shot_no = int(result['filename'][:-5])
+                if 'read failure' in result['NaN_by_chan']:
+                    print(result['filename']+" had a read error.")
+                else:
+                    for chan, NaN in result['NaN_by_chan'].items():
+                        if chan not in combined['NaN_by_chan']:
+                            combined['NaN_by_chan'][chan] = 0
+                        if NaN:
+                            combined['NaN_by_chan'][chan] += 1
+                            if shot_no not in combined['NaN_list']:
+                                combined['NaN_list'].append(shot_no)
+                    for chan, sig in result['low_sig_by_chan'].items():
+                        if chan not in combined['low_sig_by_chan']:
+                            combined['low_sig_by_chan'][chan] = 0
+                        if sig:
+                            combined['low_sig_by_chan'][chan] += 1
+                            if shot_no not in combined['low_sig_list']:
+                                combined['low_sig_list'].append(shot_no)
+                    if result['before_t_disrupt']:
+                        combined['t_disrupt_list'].append(shot_no)
+
+            return combined
+
+        #file_list = [f for f in os.listdir(data_path) if f.endswith('.hdf5')]
+        num_shots = len(shot_list)
+        print("Generating data quality report for the {} shots in "\
+              .format(int(num_shots))+data_path)
+        t_b = time.time()
+
+        print(f"Running on {os.cpu_count()} processes.")
+        with ProcessPoolExecutor() as executor:
+            # Process all files in parallel and collect results
+            try:
+                # Process a subset of files for debugging purposes
+                results = list(executor.map(process_file_quality, shot_list, [data_path]*num_shots,\
+                        [disrupt_list]*num_shots))
+            except Exception as e:
+                print(f"An error occurred: {e}")
+
+        # Combine results outside of the parallel block
+        print("Collating Results...")
+        combined = reduce_results(results)
+
+        # Now combined_results contains all the counts and lists you need
+        t_e = time.time()
+        T = t_e-t_b
+
+        print("Finished collecting info in {} seconds.".format(T))
+
+        # Write report
+        report = open(output_path+'/data_quality_report_'+todays_date+'.txt',\
+                      'w')
+        report.write('This data quality report was generated using the '+\
+                     'contents of '+output_path+'\non '+todays_date+'.\n\n')
+
+        report.write('Number of shots with NaNs present: {}\n'.format(\
+                     int(len(combined['NaN_list']))))
+        report.write('Number of shots with a std. dev. less than 1 mV: {}\n'.format(\
+                     int(len(combined['low_sig_list']))))
+        report.write('Number of disruptive shots that end before t_disrupt: {}\n'.format(\
+                     int(len(combined['t_disrupt_list']))))
+        report.write('_'*80)
+        report.write('\n\n')
+        report.write('Distribution by channel of NaN presence in shots with '+\
+                     'NaNs present:\n')
+        most_NaNs = 0
+        for key in combined['NaN_by_chan']:
+            if combined['NaN_by_chan'][key] > most_NaNs:
+                most_NaNs = combined['NaN_by_chan'][key]
+        if most_NaNs == 0:
+            most_NaNs = 1
+
+        for i in range(20):
+            for j in range(8):
+                key = '"LFS{:02d}{:02d}"'.format(i+3, j+1)
+                bar_length = int(combined['NaN_by_chan'][key]/most_NaNs*50)
+                bar = '█'*bar_length
+                report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
+                        str(int(combined['NaN_by_chan'][key]))+' | '+bar+'\n')
+        report.write('_'*80)
+        report.write('\n\n')
+        report.write('Distribution by channel of low std. dev. in shots with '+\
+                     'channels with a std. dev. smaller than 1 mV:\n')
+        most_lowsig = 0
+        for key in combined['low_sig_by_chan']:
+            if combined['low_sig_by_chan'][key] > most_lowsig:
+                most_lowsig = combined['low_sig_by_chan'][key]
+        if most_lowsig == 0:
+            most_lowsig = 1
+
+        for i in range(20):
+            for j in range(8):
+                key = '"LFS{:02d}{:02d}"'.format(i+3, j+1)
+                bar_length = int(combined['low_sig_by_chan'][key]/most_lowsig*50)
+                bar = '█'*bar_length
+                report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
+                        str(int(combined['low_sig_by_chan'][key]))+' | '+bar+'\n')
+
+        report.close()
+
+        NaN_list = np.sort(combined['NaN_list']).astype(int)
+        low_sig_list = np.sort(combined['low_sig_list']).astype(int)
+        t_disrupt_list = np.sort(combined['t_disrupt_list']).astype(int)
+
+        np.savetxt(output_path+'/contains_NaN.txt',\
+                   NaN_list, fmt='%i')
+        np.savetxt(output_path+'/low_std_dev.txt',\
+                   low_sig_list, fmt='%i')
+        np.savetxt(output_path+'/ends_before_t_disrupt.txt', t_disrupt_list,\
+                   fmt='%i')
+
+
     ###########################################################################
     ## Visualization
     ###########################################################################
@@ -1178,7 +1377,7 @@ class ECEI:
                            server = self.server, verbose = verbose,\
                            d_sample = d_sample, try_again = try_again)
 
-        missed = Count_Missing(shot_numbers, save_path, missing_path)
+        #missed = Count_Missing(shot_numbers, save_path, missing_path)
 
         t_e = time.time()
         T = t_e-t_b

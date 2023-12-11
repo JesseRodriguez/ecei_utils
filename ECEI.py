@@ -71,12 +71,16 @@ def downsample_signal(signal, orig_sample_rate, decimation_factor,\
     return downsampled_signal, time_ds
 
 
-def check_file(hdf5_path):
+def check_file(hdf5_path, verbose = True):
     if os.path.exists(hdf5_path):
         file_size = os.path.getsize(hdf5_path)
-        print(f"File {hdf5_path} exists. Size: {file_size} bytes.")
+        if verbose:
+            print(f"File {hdf5_path} exists. Size: {file_size} bytes.")
+        return True
     else:
-        print(f"File {hdf5_path} does not exist.")
+        if verbose:
+            print(f"File {hdf5_path} does not exist.")
+        return False
 
 
 def downsample_file(filename, decimation_factor, data_dir, save_dir):
@@ -86,26 +90,37 @@ def downsample_file(filename, decimation_factor, data_dir, save_dir):
     if np.random.uniform() < 1/100:
         print("Downsampling "+filename)
     try:
-        f_w = h5py.File(os.path.dir(save_dir, filename), 'a')
-        f = h5py.File(os.path.join(data_dir, filename), 'r')
+        if not check_file(os.path.join(save_dir, filename), verbose = False):
+            f_w = h5py.File(os.path.join(save_dir, filename), 'a')
+            f = h5py.File(os.path.join(data_dir, filename), 'r')
 
-        n = int(math.log10(decimation_factor))
-        time = np.asarray(f.get('time'))
-        time_ds = time[::decimation_factor]
-        f_w.create_dataset('time', data = time_ds)
-        for key in f.keys():
-            if key != 'time' and not key.startswith('missing'):
-                data = np.asarray(f.get(key))
-                fs_start = 1/(time[1]-time[0])
-                for _ in range(n):
-                    data, t = downsample_signal(data, fs_start, 10)
-                    fs_start = fs_start/10
-                f_w.create_dataset(key, data = data)
-            if key.startswith('missing'):
-                f_w.create_dataset(key, data = np.array([-1.0]))
+            n = int(math.log10(decimation_factor))
+            time = np.asarray(f.get('time'))
+            time_ds = time[::decimation_factor]
+            f_w.create_dataset('time', data = time_ds)
+            for key in f.keys():
+                if key != 'time' and not key.startswith('missing'):
+                    data = np.asarray(f.get(key))
+                    fs_start = 1/(time[1]-time[0])
+                    for _ in range(n):
+                        data, t = downsample_signal(data, fs_start, 10)
+                        fs_start = fs_start/10
+                    f_w.create_dataset(key, data = data)
+                if key.startswith('missing'):
+                    f_w.create_dataset(key, data = np.array([-1.0]))
 
-        f.close()
-        f_w.close()
+            f.close()
+            f_w.close()
+        else:
+            f = h5py.File(os.path.join(save_dir, filename), 'r')
+            num_chans = len(f.keys())
+            if num_chans < 161:
+                os.remove(os.path.join(save_dir, filename))
+                f.close()
+                downsample_file(filename, decimation_factor, data_dir, save_dir)
+            else:
+                pass
+
 
     except Exception as e:
         print(f"An error occurred in {filename}: {e}")
@@ -551,10 +566,10 @@ class ECEI:
         Downsamples all the ECEI data in one directory by a user-defined
         decimation factor. The procedure is strictly causal.
         """
-        file_list = [f for f in os.listdir(data_path) if f.endswith('.hdf5')]
+        file_list = [f for f in os.listdir(data_dir) if f.endswith('.hdf5')]
         num_shots = len(file_list)
         print("Downsampling the {} shots in "\
-              .format(int(num_shots))+data_path)
+              .format(int(num_shots))+data_dir)
         t_b = time.time()
 
         print(f"Running on {os.cpu_count()} processes.")

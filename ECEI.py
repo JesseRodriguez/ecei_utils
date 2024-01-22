@@ -73,6 +73,45 @@ def downsample_signal(signal, orig_sample_rate, decimation_factor,\
     return downsampled_signal, time_ds
 
 
+def SNR_Yilun(signal):
+    """
+    This function yields an estimate of the signal to noise ratio of a 1D time
+    series as a function of time. The method was supplied by Yilun Zhu, a
+    leading scientist who developed key improvements to the ECEI diagnostic.
+    This way of approaching SNR is important because the noise during a shot
+    varies strongly with time.
+
+    Args:
+        signal: 1D numpy array of signal values
+    """
+    M = signal.shape[0]
+    N = int(M/200)
+    if N < 10:
+        raise RuntimeError("Signal doesn't have enough timesteps for "+\
+                "meaningful binning.")
+
+    T_avg = np.convolve(signal, np.ones((N,))/N, mode = 'same')
+    fluctuation = signal - T_avg
+    noise = np.zeros_like(T_avg)
+    for i in range(M):
+        if i > N//2 and i < M-1-N//2:
+            upper = np.max(fluctuation[i-N//2:i+N//2])
+            lower = np.min(fluctuation[i-N//2:i+N//2])
+        elif i <= N//2:
+            upper = np.max(fluctuation[0:i+N//2])
+            lower = np.min(fluctuation[0:i+N//2])
+        else:
+            upper = np.max(fluctuation[i-N//2:M-1])
+            lower = np.min(fluctuation[i-N//2:M-1])
+
+        noise[i] = upper-lower
+
+    SNR = T_avg/noise
+    SNR_estimate = np.mean(np.abs(T_avg))/np.std(fluctuation)
+
+    return SNR, SNR_estimate
+
+
 def myclip(data, low, high):
     """
     Dumb clip for plotting purposes
@@ -1601,7 +1640,59 @@ class ECEI:
             else:
                 array[:,XX,YY] = np.zeros_like(time[::d_sample])
 
-        return array
+        return array, time_
+
+
+    def Visualize_SNR(self, shot, data_dir, verbose = True):
+        """
+        Makes a plot and reports the SNR of a given shot.
+        """
+        array, time = self.Load_2D_Array(shot. data_dir, units = 'T')
+
+        fig = plt.figure()
+        gs = fig.add_gridspec(4, 5, hspace=0.35, wspace=0)
+        ax = gs.subplots(sharex='col')
+        for channel in self.ecei_channels:
+            count += 1
+            row = plot_no//5
+            col = plot_no%5
+            XX = int(channel[-5:-3])-3
+            YY = int(channel[-3:-1])-1
+            SNR, SNR_est = SNR_Yilun(array[:,XX,YY])
+
+            if verbose:
+                print("SNR estimate in channel "+channel+":", SNR_est)
+
+            ax[row,col].plot(time, SNR, label = 'YY = '+channel[-3:-1],\
+                             linewidth = 0.4, alpha = 0.8)
+            if count%8 == 0:
+                plot_no += 1
+                XX = channel[-5:-3]
+                title = 'XX = {}'.format(XX)
+                ax[row,col].set_title(title, fontsize = 5)
+                #ax[row,col].legend(prop={'size': 2.75})
+                ax[row,col].tick_params(width = 0.3)
+
+        fig.suptitle('SNR for Shot #{}'.format(int(shot)), fontsize = 10)
+        for axs in ax.flat:
+            axs.set_xlabel('Time (ms)', fontsize = 5)
+            axs.set_ylabel('SNR Proxy', fontsize = 5)
+
+        # Hide x labels and tick labels for top plots and y ticks for right plots.
+        for axs in ax.flat:
+            axs.label_outer()
+            axs.tick_params(axis='x', labelsize = 5)
+            axs.tick_params(axis='y', labelsize = 5)
+
+        labels = []
+        for i in range(8):
+            labels.append('YY = {:2d}'.format(i+1))
+        fig.legend(labels=labels, loc="lower center", ncol=8, prop={'size': 5.5})
+
+        if show: 
+            fig.show()
+
+        fig.savefig(save_dir+'/SNR_Shot_{}.pdf'.format(int(shot)))
 
 
     def Make_ECEI_Movie(self, shot, data_dir, save_dir = os.getcwd(),\

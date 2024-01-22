@@ -73,7 +73,7 @@ def downsample_signal(signal, orig_sample_rate, decimation_factor,\
     return downsampled_signal, time_ds
 
 
-def SNR_Yilun(signal):
+def SNR_Yilun(signal, visual = False):
     """
     This function yields an estimate of the signal to noise ratio of a 1D time
     series as a function of time. The method was supplied by Yilun Zhu, a
@@ -92,24 +92,29 @@ def SNR_Yilun(signal):
 
     T_avg = np.convolve(signal, np.ones((N,))/N, mode = 'same')
     fluctuation = signal - T_avg
-    noise = np.zeros_like(T_avg)
-    for i in range(M):
-        if i > N//2 and i < M-1-N//2:
-            upper = np.max(fluctuation[i-N//2:i+N//2])
-            lower = np.min(fluctuation[i-N//2:i+N//2])
-        elif i <= N//2:
-            upper = np.max(fluctuation[0:i+N//2])
-            lower = np.min(fluctuation[0:i+N//2])
-        else:
-            upper = np.max(fluctuation[i-N//2:M-1])
-            lower = np.min(fluctuation[i-N//2:M-1])
+    if visual:
+        noise = np.zeros_like(T_avg)
+        for i in range(M):
+            if i > N//2 and i < M-1-N//2:
+                upper = np.max(fluctuation[i-N//2:i+N//2])
+                lower = np.min(fluctuation[i-N//2:i+N//2])
+            elif i <= N//2:
+                upper = np.max(fluctuation[0:i+N//2])
+                lower = np.min(fluctuation[0:i+N//2])
+            else:
+                upper = np.max(fluctuation[i-N//2:M-1])
+                lower = np.min(fluctuation[i-N//2:M-1])
 
-        noise[i] = upper-lower
+            noise[i] = upper-lower
 
-    SNR = T_avg/noise
+        SNR = T_avg/noise
+        SNR_estimate = np.mean(np.abs(T_avg))/np.std(fluctuation)
+
+        return SNR, SNR_estimate
+    
     SNR_estimate = np.mean(np.abs(T_avg))/np.std(fluctuation)
 
-    return SNR, SNR_estimate
+    return SNR_estimate
 
 
 def myclip(data, low, high):
@@ -1643,22 +1648,25 @@ class ECEI:
         return array, time_
 
 
-    def Visualize_SNR(self, shot, data_dir, verbose = True):
+    def Visualize_SNR(self, shot, data_dir, save_dir = os.getcwd(),\
+            verbose = True, show = False):
         """
         Makes a plot and reports the SNR of a given shot.
         """
-        array, time = self.Load_2D_Array(shot. data_dir, units = 'T')
+        array, time = self.Load_2D_Array(shot, data_dir, units = 'T')
 
         fig = plt.figure()
         gs = fig.add_gridspec(4, 5, hspace=0.35, wspace=0)
         ax = gs.subplots(sharex='col')
+        count = 0
+        plot_no = 0
         for channel in self.ecei_channels:
             count += 1
             row = plot_no//5
             col = plot_no%5
             XX = int(channel[-5:-3])-3
             YY = int(channel[-3:-1])-1
-            SNR, SNR_est = SNR_Yilun(array[:,XX,YY])
+            SNR, SNR_est = SNR_Yilun(array[:,XX,YY], visual = True)
 
             if verbose:
                 print("SNR estimate in channel "+channel+":", SNR_est)

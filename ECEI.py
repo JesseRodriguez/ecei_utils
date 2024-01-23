@@ -108,9 +108,10 @@ def SNR_Yilun(signal, visual = False):
             noise[i] = upper-lower
 
         SNR = T_avg/noise
+        SNR_mean = np.mean(SNR)
         SNR_estimate = np.mean(np.abs(T_avg))/np.std(fluctuation)
 
-        return SNR, SNR_estimate
+        return SNR, SNR_estimate, SNR_mean
     
     SNR_estimate = np.mean(np.abs(T_avg))/np.std(fluctuation)
 
@@ -302,12 +303,15 @@ def process_file_quality(shot_no, data_path, disrupt_list):
         with h5py.File(os.path.join(data_path, filename), 'r') as f:
             NaN_by_chan = {}
             low_sig_by_chan = {}
+            low_SNR_by_chan = {}
             for key in f.keys():
                 if key != 'time' and not key.startswith('missing'):
                     data = np.asarray(f.get(key))
                     sig = np.sqrt(np.var(data))
+                    SNR = SNR_Yilun(data)
                     NaN_by_chan[key[-9:]] = np.any(np.isnan(data))
                     low_sig_by_chan[key[-9:]] = (sig < 0.001)
+                    low_SNR_by_chan[key[-9:]] = (SNR < 3)
                 elif key == 'time':
                     time = np.asarray(f.get(key))
                     if shot_no in disrupt_list[:,0]:
@@ -321,12 +325,14 @@ def process_file_quality(shot_no, data_path, disrupt_list):
     except:
         NaN_by_chan = {'read failure': None}
         low_sig_by_chan = {'read failure': None}
+        low_SNR_by_chan = {'read failure': None}
         ends = True
 
     # Return a dictionary of results for this file
     return {
         'filename': filename,
         'low_sig_by_chan': low_sig_by_chan,
+        'low_SNR_by_chan': low_SNR_by_chan,
         'NaN_by_chan': NaN_by_chan,
         'before_t_disrupt': ends
     }
@@ -700,7 +706,8 @@ class ECEI:
     ###########################################################################
     ## Data Processing
     ###########################################################################
-    def Downsample_Folder(self, data_dir, save_dir, decimation_factor):
+    def Downsample_Folder(self, data_dir, save_dir, decimation_factor,\
+            cpu_use = 0.8):
         """
         Downsamples all the ECEI data in one directory by a user-defined
         decimation factor. The procedure is strictly causal.
@@ -711,8 +718,10 @@ class ECEI:
               .format(int(num_shots))+data_dir)
         t_b = time.time()
 
-        print(f"Running on {os.cpu_count()} processes.")
-        with ProcessPoolExecutor() as executor:
+        assert cpu_use < 1
+        use_cores = max(1, int((cpu_use)*mp.cpu_count()))
+        print(f"Running on {use_cores} processes.")
+        with ProcessPoolExecutor(max_workers = use_cores) as executor:
             # Process all files in parallel and collect results
             try:
                 # Process a subset of files for debugging purposes
@@ -847,7 +856,7 @@ class ECEI:
         report.close()
 
 
-    def Fix_None_Channels_Directory(self, directory):
+    def Fix_None_Channels_Directory(self, directory, cpu_use = 0.8):
         """
         Given a directory, check each file if it has any None datasets and fix
         them.
@@ -862,8 +871,8 @@ class ECEI:
               .format(int(num_shots))+directory)
         t_b = time.time()
 
-        print(f"Running on {int(os.cpu_count()*0.9)} processes.")
-        workers = 10#int(os.cpu_count()*0.9)
+        print(f"Running on {int(os.cpu_count()*cpu_use)} processes.")
+        workers = max(1, int(os.cpu_count()*cpu_use))
         with ProcessPoolExecutor(max_workers = workers) as executor:
             # Process all files in parallel and collect results
             try:
@@ -1085,7 +1094,7 @@ class ECEI:
 
 
     def Generate_Missing_Report_Parallel(self, todays_date,\
-            data_path = os.getcwd(), output_path = os.getcwd()):
+            data_path = os.getcwd(), output_path = os.getcwd(), cpu_use = 0.8):
         """
         Creates a report of missing data in a more readable format.
 
@@ -1152,8 +1161,10 @@ class ECEI:
               .format(int(num_shots))+data_path)
         t_b = time.time()
 
-        print(f"Running on {os.cpu_count()} processes.")
-        with ProcessPoolExecutor() as executor:
+        assert cpu_use < 1
+        use_cores = max(1, int((cpu_use)*mp.cpu_count()))
+        print(f"Running on {use_cores} processes.")
+        with ProcessPoolExecutor(max_workers = use_cores) as executor:
             # Process all files in parallel and collect results
             try:
                 # Process a subset of files for debugging purposes
@@ -1376,7 +1387,8 @@ class ECEI:
 
 
     def Generate_Quality_Report_Parallel(self, todays_date, disrupt_list,\
-            shot_list, data_path = os.getcwd(), output_path = os.getcwd()):
+            shot_list, data_path = os.getcwd(), output_path = os.getcwd(),\
+            cpu_use = 0.8):
         """
         Creates a report of missing data in a more readable format.
 
@@ -1391,6 +1403,8 @@ class ECEI:
             combined = {
                 'low_sig_by_chan': {},
                 'low_sig_list': [],
+                'low_SNR_by_chan': {},
+                'low_SNR_list': [],
                 'NaN_by_chan': {},
                 'NaN_list': [],
                 't_disrupt_list': [],
@@ -1399,6 +1413,9 @@ class ECEI:
 
             for result in results:
                 shot_no = int(result['filename'][:-5])
+                low_sig_chan_count = 0
+                low_SNR_chan_count = 0
+                NaN_present = False
                 if 'read failure' in result['NaN_by_chan']:
                     print(result['filename']+" had a read error.")
                     combined['read_error_list'].append(shot_no)
@@ -1408,15 +1425,29 @@ class ECEI:
                             combined['NaN_by_chan'][chan] = 0
                         if NaN:
                             combined['NaN_by_chan'][chan] += 1
-                            if shot_no not in combined['NaN_list']:
-                                combined['NaN_list'].append(shot_no)
+                            NaN_present = True
                     for chan, sig in result['low_sig_by_chan'].items():
                         if chan not in combined['low_sig_by_chan']:
                             combined['low_sig_by_chan'][chan] = 0
                         if sig:
                             combined['low_sig_by_chan'][chan] += 1
-                            if shot_no not in combined['low_sig_list']:
-                                combined['low_sig_list'].append(shot_no)
+                            low_sig_chan_count += 1
+                    for chan, SNR in result['low_SNR_by_chan'].items():
+                        if chan not in combined['low_SNR_by_chan']:
+                            combined['low_SNR_by_chan'][chan] = 0
+                        if SNR:
+                            combined['low_SNR_by_chan'][chan] += 1
+                            low_SNR_chan_count += 1
+
+                    if shot_no not in combined['NaN_list'] and NaN_present:
+                        combined['NaN_list'].append(shot_no)
+                    if shot_no not in combined['low_sig_list'] and\
+                            low_sig_chan_count >= 80:
+                        combined['low_sig_list'].append(shot_no)
+                    if shot_no not in combined['low_sig_list'] and\
+                            low_SNR_chan_count >= 80:
+                        combined['low_SNR_list'].append(shot_no)
+
                     if result['before_t_disrupt']:
                         combined['t_disrupt_list'].append(shot_no)
 
@@ -1428,8 +1459,10 @@ class ECEI:
               .format(int(num_shots))+data_path)
         t_b = time.time()
 
-        print(f"Running on {os.cpu_count()} processes.")
-        with ProcessPoolExecutor() as executor:
+        assert cpu_use < 1
+        use_cores = max(1, int((cpu_use)*mp.cpu_count()))
+        print(f"Running on {use_cores} processes.")
+        with ProcessPoolExecutor(max_workers = use_cores) as executor:
             # Process all files in parallel and collect results
             try:
                 # Process a subset of files for debugging purposes
@@ -1456,8 +1489,10 @@ class ECEI:
 
         report.write('Number of shots with NaNs present: {}\n'.format(\
                      int(len(combined['NaN_list']))))
-        report.write('Number of shots with a std. dev. less than 1 mV: {}\n'.format(\
+        report.write('Number of shots with >=80 channels with a std. dev. less than 1 mV: {}\n'.format(\
                      int(len(combined['low_sig_list']))))
+        report.write('Number of shots with >=80 channels with a Yilun SNR less than 3: {}\n'.format(\
+                     int(len(combined['low_SNR_list']))))
         report.write('Number of disruptive shots that end before t_disrupt: {}\n'.format(\
                      int(len(combined['t_disrupt_list']))))
         report.write('_'*80)
@@ -1478,6 +1513,7 @@ class ECEI:
                 bar = '█'*bar_length
                 report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
                         str(int(combined['NaN_by_chan'][key]))+' | '+bar+'\n')
+
         report.write('_'*80)
         report.write('\n\n')
         report.write('Distribution by channel of low std. dev. in shots with '+\
@@ -1497,17 +1533,36 @@ class ECEI:
                 report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
                         str(int(combined['low_sig_by_chan'][key]))+' | '+bar+'\n')
 
+        report.write('_'*80)
+        report.write('\n\n')
+        report.write('Distribution by channel of low Yilun SNR in shots with '+\
+                     'channels with Yilun SNR smaller than 3:\n')
+        most_lowSNR = 0
+        for key in combined['low_SNR_by_chan']:
+            if combined['low_SNR_by_chan'][key] > most_lowSNR:
+                most_lowSNR = combined['low_SNR_by_chan'][key]
+        if most_lowSNR == 0:
+            most_lowSNR = 1
+
+        for i in range(20):
+            for j in range(8):
+                key = '"{}{:02d}{:02d}"'.format(self.side, i+3, j+1)
+                bar_length = int(combined['low_SNR_by_chan'][key]/most_lowSNR*50)
+                bar = '█'*bar_length
+                report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
+                        str(int(combined['low_SNR_by_chan'][key]))+' | '+bar+'\n')
+
         report.close()
 
         NaN_list = np.sort(combined['NaN_list']).astype(int)
         low_sig_list = np.sort(combined['low_sig_list']).astype(int)
+        low_SNR_list = np.sort(combined['low_SNR_list']).astype(int)
         t_disrupt_list = np.sort(combined['t_disrupt_list']).astype(int)
         read_error_list = np.sort(combined['read_error_list']).astype(int)
 
-        np.savetxt(output_path+'/contains_NaN.txt',\
-                   NaN_list, fmt='%i')
-        np.savetxt(output_path+'/low_std_dev.txt',\
-                   low_sig_list, fmt='%i')
+        np.savetxt(output_path+'/contains_NaN.txt', NaN_list, fmt='%i')
+        np.savetxt(output_path+'/low_std_dev.txt', low_sig_list, fmt='%i')
+        np.savetxt(output_path+'/low_SNR.txt', low_SNR_list, fmt='%i')
         np.savetxt(output_path+'/ends_before_t_disrupt.txt', t_disrupt_list,\
                    fmt='%i')
         np.savetxt(output_path+'/read_error_list.txt', read_error_list,\
@@ -1666,10 +1721,10 @@ class ECEI:
             col = plot_no%5
             XX = int(channel[-5:-3])-3
             YY = int(channel[-3:-1])-1
-            SNR, SNR_est = SNR_Yilun(array[:,XX,YY], visual = True)
+            SNR, SNR_est, SNR_est2 = SNR_Yilun(array[:,XX,YY], visual = True)
 
             if verbose:
-                print("SNR estimate in channel "+channel+":", SNR_est)
+                print("SNR estimate in channel "+channel+":", SNR_est, SNR_est2)
 
             ax[row,col].plot(time, SNR, label = 'YY = '+channel[-3:-1],\
                              linewidth = 0.4, alpha = 0.8)

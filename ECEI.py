@@ -38,11 +38,9 @@ def downsample_signal(signal, orig_sample_rate, decimation_factor,\
                         time = np.array([])):
     """
     Downsample a given signal from original sample rate to target sample rate,
-    using a Kaiser window with beta = 3 and 12 taps. If your decimation factor
-    is greater than 10, I'd recommend applying this function several times 
-    successively. Furthermore, if your decimation factor is lower than 6, the
-    output will be delayed by more than one time-step at the target sample rate.
-    This downsampling procedure is strictly causal.
+    using a Kaiser window with beta = 3 and 12 taps for decimation factors 
+    between 6 and 10, and adjusting the filter when the decimation factor is
+    less than 6. This downsampling procedure is strictly causal.
                                     
     Parameters:
         signal (numpy.array): The input signal
@@ -57,7 +55,16 @@ def downsample_signal(signal, orig_sample_rate, decimation_factor,\
     target_sample_rate = orig_sample_rate/decimation_factor
     
     # Calculate filter coefficients
-    filter_coeffs = scipy.signal.firwin(12, target_sample_rate,\
+    if decimation_factor < 6:
+        filter_coeffs = scipy.signal.firwin(decimation_factor*2+1,\
+                        target_sample_rate/2, window = ('kaiser',1.75),\
+                        fs = orig_sample_rate)
+    elif decimation_factor > 10:
+        raise RuntimeError("It is not advised to use decimation factors "+\
+                          "greater than 10 with this downsampling function.\n"+\
+                          "Break the procedure into multiple steps.")
+    else:
+        filter_coeffs = scipy.signal.firwin(12, target_sample_rate,\
                         window = ('kaiser',3), fs = orig_sample_rate)
 
     # Apply the low-pass filter using lfilter to maintain strict causality
@@ -133,6 +140,62 @@ def myclip(data, low, high):
             clipped_data[i] = data[i]
 
     return clipped_data
+
+
+def remove_spikes(data):
+    """
+    Remove non-physical spikes from the data (naive method).
+    """
+    for i in range(data.shape[0]):
+        if i>1 and np.abs(data[i]) > 10*np.abs(data[i-1]):
+            data[i] = data[i-1]
+
+
+def remove_spikes_robust_Z(data, dt = 1/100000, threshold = 3):
+    """
+    remove outliers using a robust Z-score method
+    """
+    N = 50
+    T_warmup = int((50/1000)/dt)
+    for i in range(data.shape[0]-T_warmup):
+        I = i+T_warmup
+        median = np.median(data[I-N:I])
+        MAD = np.median(np.abs(data[I-N:I]-median))
+        Z = 0.6745*np.abs(data[i]-median)/(MAD+10**(-8))
+        if Z > threshold:
+            data[i] = data[i-1]
+
+
+def remove_spikes_in_file(filename, data_dir, save_dir):
+    """
+    Run the routine to remove voltage spikes on a single file
+    """
+    if np.random.uniform() < 1/50:
+        print("Downsampling "+filename)
+    try:
+        if not check_file(os.path.join(save_dir, filename), verbose = False):
+            f = h5py.File(os.path.join(data_dir, filename), 'r')
+            f_w = h5py.File(os.path.join(save_dir, filename), 'a')
+
+            t = np.asarray(f.get('time'))
+            f_w.create_dataset('time', data = t)
+            dt = t[1]-t[0]
+            for key in f.keys():
+                if key != 'time' and not key.startswith('missing'):
+                    data = np.asarray(f.get(key))
+                    remove_spikes_robust_Z(data, dt)
+                    f_w.create_dataset(key, data = data)
+                if key.startswith('missing'):
+                    f_w.create_dataset(key, data = np.array([-1.0]))
+
+            f.close()
+            f_w.close()
+
+        else:
+            pass
+
+    except Exception as e:
+        print(f"An error occurred in {filename}: {e}")
 
 
 def check_file(hdf5_path, verbose = True):
@@ -1573,7 +1636,7 @@ class ECEI:
     ## Visualization
     ###########################################################################
     def Single_Shot_Plot(self, shot, data_path, save_dir = os.getcwd(),\
-                         show = False, d_sample = 10):
+                         show = False, d_sample = 10, rm_spikes=True):
         """
         Plot voltage traces for a single shot, saves plot as a .pdf
 
@@ -1583,6 +1646,8 @@ class ECEI:
             save_dir: str, directory for output plot image
             shot: bool, determines whether output is shown right away
         """
+        T_0 = time.time()
+
         shot_file = data_path+'/'+str(int(shot))+'.hdf5'
         f = h5py.File(shot_file, 'r')
         fig = plt.figure()
@@ -1590,8 +1655,8 @@ class ECEI:
         ax = gs.subplots(sharex='col')
         count = 0
         plot_no = 0
-        time = f.get('time')
-        fs_start = 1/(time[1]-time[0])
+        t = f.get('time')
+        fs_start = 1/(t[1]-t[0])
         n = int(math.log10(d_sample))
         for channel in self.ecei_channels:
             count += 1
@@ -1600,17 +1665,15 @@ class ECEI:
             if channel in f.keys():
                 data = f.get(channel)
                 data_ = np.copy(data)
-                time_ = np.copy(time)
+                time_ = np.copy(t)
                 for _ in range(n):
                     data_, time_ = downsample_signal(data_, fs_start, 10, time_)
                     fs_start = fs_start/10
-                mean = np.mean(data_)
-                std_dev = np.std(data_)
-                threshold = 3
-
-                # Clipping outliers
-                clipped_data = myclip(data_, mean - threshold*std_dev, mean + threshold*std_dev)
-                ax[row,col].plot(time_[:], clipped_data[:],\
+                t0 = time.time()
+                if rm_spikes:
+                    remove_spikes_robust_Z(data_)
+                print(f"removed spikes in {channel} in {time.time()-t0} seconds.")
+                ax[row,col].plot(time_[:], data_,\
                                  label = 'YY = '+channel[-3:-1],\
                                  linewidth = 0.4, alpha = 0.8)
             if count%8 == 0:
@@ -1641,6 +1704,7 @@ class ECEI:
             fig.show()
 
         fig.savefig(save_dir+'/Shot_{}.pdf'.format(int(shot)))
+        print(f"generated single shot plot in {time.time()-t0} seconds.")
 
 
     def Convert_to_dT(self, data, time, features = 10**4):
@@ -1673,7 +1737,7 @@ class ECEI:
 
 
     def Load_2D_Array(self, shot, data_dir, units = 'dT', features = 10**4,\
-            d_sample = 1):
+            d_sample = 1, rm_spikes = False):
         """
         Loads and returns a (num_timesteps, 20, 8) array of the ECEI data
         """
@@ -1696,11 +1760,46 @@ class ECEI:
                 for _ in range(n):
                     data_, time_ = downsample_signal(data_, fs_start, 10, time_)
                     fs_start = fs_start/10
+                if rm_spikes:
+                    remove_spikes_robust_Z(data_)
                 array[:,XX,YY] = data_
             else:
                 array[:,XX,YY] = np.zeros_like(time[::d_sample])
 
         return array, time_
+
+
+    def Load_Channel(self, shot, data_dir, channel, units = 'dT', features = 10**4,\
+            d_sample = 1, rm_spikes = False):
+        """
+        Get a 1D numpy array for a single channel.
+
+        Args:
+            shot: int, shot number
+            channel: str, format "XXYY", 03<=XX<=22, 01<=YY<=08, designates
+                     channel
+        """
+        shot_file = data_dir+'/'+str(int(shot))+'.hdf5'
+        f = h5py.File(shot_file, 'r')
+
+        data = np.asarray(f.get('"'+self.side+channel+'"'))
+        time = np.asarray(f.get('time'))
+
+        fs_start = 1/(time[1]-time[0])
+        n = int(math.log10(d_sample))
+        if units == 'dT':
+            data = self.Convert_to_dT(data, time, features)
+        data_ = np.copy(data)
+        time_ = np.copy(time)
+        for _ in range(n):
+            data_, time_ = downsample_signal(data_, fs_start, 10, time_)
+            fs_start = fs_start/10
+        if rm_spikes:
+            remove_spikes_robust_Z(data_)
+            return data_, time_
+        else:
+            return data_, time_
+
 
 
     def Visualize_SNR(self, shot, data_dir, save_dir = os.getcwd(),\

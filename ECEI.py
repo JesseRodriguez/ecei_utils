@@ -670,10 +670,13 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
                         data = rec[channel[1:-1]]['data']
                         time = rec[channel[1:-1]]['times']
                         fs_start = 1/(time[1]-time[0])
-                        n = int(math.log10(d_sample))
-                        for _ in range(n):
-                            data, time = downsample_signal(data, fs_start, 10, time)
-                            fs_start = fs_start/10
+                        if d_sample >= 10:
+                            n = int(math.log10(d_sample))
+                            for _ in range(n):
+                                data, time = downsample_signal(data, fs_start, 10, time)
+                                fs_start = fs_start/10
+                        else:
+                            data, time = downsample_signal(data, fs_start, d_sample, time)
                     except Exception as e:
                         if verbose:
                             print(f"An error occurred in channel {channel}, shot {shot_id}: {e}")

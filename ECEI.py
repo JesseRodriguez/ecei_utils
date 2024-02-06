@@ -192,7 +192,15 @@ def remove_spikes_in_file(filename, data_dir, save_dir):
             f_w.close()
 
         else:
-            pass
+            f = h5py.File(os.path.join(save_dir, filename), 'r')
+            num_chans = len(f.keys())
+            if num_chans < 161:
+                f.close()
+                os.remove(os.path.join(save_dir, filename))
+                remove_spikes_in_file(filename, decimation_factor, data_dir, save_dir)
+            else:
+                f.close()
+                pass
 
     except Exception as e:
         print(f"An error occurred in {filename}: {e}")
@@ -790,7 +798,6 @@ class ECEI:
         with ProcessPoolExecutor(max_workers = use_cores) as executor:
             # Process all files in parallel and collect results
             try:
-                # Process a subset of files for debugging purposes
                 results = list(executor.map(downsample_file, file_list,\
                         [decimation_factor]*num_shots, [data_dir]*num_shots,\
                         [save_dir]*num_shots))
@@ -801,6 +808,34 @@ class ECEI:
         T = t_e-t_b
 
         print("Finished downsampling signals in {} seconds.".format(T))
+
+
+    def Remove_Spikes_Folder(self, data_dir, save_dir, cpu_use = 0.8):
+        """
+        Downsamples all the ECEI data in one directory by a user-defined
+        decimation factor. The procedure is strictly causal.
+        """
+        file_list = [f for f in os.listdir(data_dir) if f.endswith('.hdf5')]
+        num_shots = len(file_list)
+        print("Removing non-physical spikes in the {} shots in "\
+              .format(int(num_shots))+data_dir)
+        t_b = time.time()
+
+        assert cpu_use < 1
+        use_cores = max(1, int((cpu_use)*mp.cpu_count()))
+        print(f"Running on {use_cores} processes.")
+        with ProcessPoolExecutor(max_workers = use_cores) as executor:
+            # Process all files in parallel and collect results
+            try:
+                results = list(executor.map(remove_spikes_in_file, file_list,\
+                        [data_dir]*num_shots, [save_dir]*num_shots))
+            except Exception as e:
+                print(f"An error occurred: {e}")
+
+        t_e = time.time()
+        T = t_e-t_b
+
+        print("Finished removing spikes in {} seconds.".format(T))
 
 
     def Generate_Missing_Report(self, shots, shot_1, clear_file, disrupt_file,\

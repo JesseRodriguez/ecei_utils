@@ -1276,6 +1276,9 @@ class ECEI:
             if combined['missing_by_chan'][key] > most_miss:
                 most_miss = combined['missing_by_chan'][key]
 
+        if most_miss == 0:
+            most_miss=1
+
         for i in range(20):
             for j in range(8):
                 key = '"{}{:02d}{:02d}"'.format(self.side, i+3, j+1)

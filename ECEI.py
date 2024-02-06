@@ -812,8 +812,8 @@ class ECEI:
 
     def Remove_Spikes_Folder(self, data_dir, save_dir, cpu_use = 0.8):
         """
-        Downsamples all the ECEI data in one directory by a user-defined
-        decimation factor. The procedure is strictly causal.
+        Removes non-physical voltage spikes from the ECEI data in a given
+        directory and saves the result
         """
         file_list = [f for f in os.listdir(data_dir) if f.endswith('.hdf5')]
         num_shots = len(file_list)

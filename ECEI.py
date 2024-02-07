@@ -810,13 +810,20 @@ class ECEI:
         print("Finished downsampling signals in {} seconds.".format(T))
 
 
-    def Remove_Spikes_Folder(self, data_dir, save_dir, cpu_use = 0.8):
+    def Remove_Spikes_Folder(self, data_dir, save_dir, cpu_use = 0.8,\
+            n_files = 0, i_start = 0):
         """
         Removes non-physical voltage spikes from the ECEI data in a given
         directory and saves the result
         """
-        file_list = [f for f in os.listdir(data_dir) if f.endswith('.hdf5')]
-        num_shots = len(file_list)
+        file_list_all = [f for f in os.listdir(data_dir) if f.endswith('.hdf5')]
+        sorted_file_list = sorted(file_list_all, key=lambda x: int(x.split('.')[0]))
+        if n_files > 0:
+            file_list = sorted_file_list[i_start:i_start+n_files]
+            num_shots = n_files
+        else:
+            file_list = file_list_all
+            num_shots = len(file_list)
         print("Removing non-physical spikes in the {} shots in "\
               .format(int(num_shots))+data_dir)
         t_b = time.time()

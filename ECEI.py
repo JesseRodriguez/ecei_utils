@@ -7,6 +7,7 @@ Jesse A Rodriguez, 06/28/2021
 """
 
 import numpy as np
+import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
@@ -157,8 +158,10 @@ def remove_spikes_robust_Z(data, dt = 1/100000, threshold = 3):
     """
     N = 50
     T_warmup = int((50/1000)/dt)
+    print(T_warmup)
     for i in range(data.shape[0]-T_warmup):
         I = i+T_warmup
+        #if I >= N:
         median = np.median(data[I-N:I])
         MAD = np.median(np.abs(data[I-N:I]-median))
         Z = 0.6745*np.abs(data[i]-median)/(MAD+10**(-8))
@@ -166,12 +169,33 @@ def remove_spikes_robust_Z(data, dt = 1/100000, threshold = 3):
             data[i] = data[i-1]
 
 
+def remove_spikes_robust_Z_pandas(data, dt=1/100000, threshold=3, N=50):
+    T_warmup = int((50/1000)/dt)
+    # Convert data to a pandas Series
+    s = pd.Series(data)
+    
+    # Calculate rolling median and MAD
+    roll_median = s.rolling(window=N).median()
+    roll_mad = s.rolling(window=N).apply(lambda x: np.median(np.abs(x - x.median())), raw=False)
+    
+    # Calculate Z-score for each point
+    Z = 0.6745 * np.abs(s - roll_median) / (roll_mad + 10**(-8))
+    
+    # Identify outliers
+    outliers = Z > threshold
+    
+    # Correct outliers
+    for i in range(T_warmup, len(data)):
+        if outliers[i]:
+            data[i] = data[i-1]
+
+
 def remove_spikes_in_file(filename, data_dir, save_dir):
     """
     Run the routine to remove voltage spikes on a single file
     """
-    if np.random.uniform() < 1/50:
-        print("Downsampling "+filename)
+    if np.random.uniform() < 1/64:
+        print("Removing spikes in "+filename)
     try:
         if not check_file(os.path.join(save_dir, filename), verbose = False):
             f = h5py.File(os.path.join(data_dir, filename), 'r')
@@ -179,11 +203,14 @@ def remove_spikes_in_file(filename, data_dir, save_dir):
 
             t = np.asarray(f.get('time'))
             f_w.create_dataset('time', data = t)
-            dt = t[1]-t[0]
+            dt = (t[int(t.shape[0]/2)]-t[int(t.shape[0]/2)-1])/1000
+            print(dt, 1/dt)
             for key in f.keys():
                 if key != 'time' and not key.startswith('missing'):
                     data = np.asarray(f.get(key))
+                    print('removing spikes in ',key)
                     remove_spikes_robust_Z(data, dt)
+                    print('removed')
                     f_w.create_dataset(key, data = data)
                 if key.startswith('missing'):
                     f_w.create_dataset(key, data = np.array([-1.0]))
@@ -197,7 +224,7 @@ def remove_spikes_in_file(filename, data_dir, save_dir):
             if num_chans < 161:
                 f.close()
                 os.remove(os.path.join(save_dir, filename))
-                remove_spikes_in_file(filename, decimation_factor, data_dir, save_dir)
+                remove_spikes_in_file(filename, data_dir, save_dir)
             else:
                 f.close()
                 pass
@@ -828,7 +855,7 @@ class ECEI:
               .format(int(num_shots))+data_dir)
         t_b = time.time()
 
-        assert cpu_use < 1
+        assert cpu_use <= 1
         use_cores = max(1, int((cpu_use)*mp.cpu_count()))
         print(f"Running on {use_cores} processes.")
         with ProcessPoolExecutor(max_workers = use_cores) as executor:

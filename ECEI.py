@@ -158,7 +158,7 @@ def remove_spikes_robust_Z(data, dt = 1/100000, threshold = 3):
     """
     N = 50
     T_warmup = int((50/1000)/dt)
-    print(T_warmup)
+    #print(T_warmup)
     for i in range(data.shape[0]-T_warmup):
         I = i+T_warmup
         #if I >= N:
@@ -204,13 +204,13 @@ def remove_spikes_in_file(filename, data_dir, save_dir):
             t = np.asarray(f.get('time'))
             f_w.create_dataset('time', data = t)
             dt = (t[int(t.shape[0]/2)]-t[int(t.shape[0]/2)-1])/1000
-            print(dt, 1/dt)
+            #print(dt, 1/dt)
             for key in f.keys():
                 if key != 'time' and not key.startswith('missing'):
                     data = np.asarray(f.get(key))
-                    print('removing spikes in ',key)
+                    #print('removing spikes in ',key)
                     remove_spikes_robust_Z(data, dt)
-                    print('removed')
+                    #print('removed')
                     f_w.create_dataset(key, data = data)
                 if key.startswith('missing'):
                     f_w.create_dataset(key, data = np.array([-1.0]))
@@ -819,7 +819,7 @@ class ECEI:
               .format(int(num_shots))+data_dir)
         t_b = time.time()
 
-        assert cpu_use < 1
+        assert cpu_use <= 1
         use_cores = max(1, int((cpu_use)*mp.cpu_count()))
         print(f"Running on {use_cores} processes.")
         with ProcessPoolExecutor(max_workers = use_cores) as executor:

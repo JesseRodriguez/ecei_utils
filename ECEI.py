@@ -250,41 +250,53 @@ def remove_spikes_in_file(filename, data_dir, save_dir):
     """
     if np.random.uniform() < 1/64:
         print("Removing spikes in "+filename)
+
     try:
-        if not check_file(os.path.join(save_dir, filename), verbose = False):
-            f = h5py.File(os.path.join(data_dir, filename), 'r')
-            f_w = h5py.File(os.path.join(save_dir, filename), 'a')
+        f = h5py.File(os.path.join(data_dir, filename), 'r')
+    except Exception as e:
+        print(f"An error occurred while opening {filename} in {data_dir}: {e}")
 
-            t = np.asarray(f.get('time'))
+    try:
+        f_w = h5py.File(os.path.join(save_dir, filename), 'a')
+    except Exception as e:
+        print(f"An error occurred while opening {filename} in {save_dir}: {e}")
+        #f_w.close()
+        os.remove(os.path.join(save_dir, filename))
+        remove_spikes_in_file(filename, data_dir, save_dir)
+
+    t = np.asarray(f.get('time'))
+    if 'time' not in f_w:
+        try:
             f_w.create_dataset('time', data = t)
-            dt = (t[int(t.shape[0]/2)]-t[int(t.shape[0]/2)-1])/1000
-            #print(dt, 1/dt)
-            for key in f.keys():
-                if key != 'time' and not key.startswith('missing'):
-                    data = np.asarray(f.get(key))
-                    #print('removing spikes in ',key)
-                    remove_spikes_custom_Z(data, dt)
-                    #print('removed')
-                    f_w.create_dataset(key, data = data)
-                if key.startswith('missing'):
-                    f_w.create_dataset(key, data = np.array([-1.0]))
-
-            f.close()
+        except Exception as e:
+            print(f"An error occurred while writing to {filename} in {save_dir}: {e}")
             f_w.close()
+            os.remove(os.path.join(save_dir, filename))
+            remove_spikes_in_file(filename, data_dir, save_dir)
+    dt = (t[int(t.shape[0]/2)]-t[int(t.shape[0]/2)-1])/1000
 
-        else:
-            f = h5py.File(os.path.join(save_dir, filename), 'r')
-            num_chans = len(f.keys())
-            if num_chans < 161:
-                f.close()
+    for key in f.keys():
+        if key != 'time' and not key.startswith('missing') and key not in f_w:
+            data = np.asarray(f.get(key))
+            remove_spikes_custom_Z(data, dt)
+            try:
+                f_w.create_dataset(key, data = data)
+            except Exception as e:
+                print(f"An error occurred while writing to {filename} in {save_dir}: {e}")
+                f_w.close()
                 os.remove(os.path.join(save_dir, filename))
                 remove_spikes_in_file(filename, data_dir, save_dir)
-            else:
-                f.close()
-                pass
+        if key.startswith('missing') and key not in f_w:
+            try:
+                f_w.create_dataset(key, data = np.array([-1.0]))
+            except Exception as e:
+                print(f"An error occurred while writing to {filename} in {save_dir}: {e}")
+                f_w.close()
+                os.remove(os.path.join(save_dir, filename))
+                remove_spikes_in_file(filename, data_dir, save_dir)
 
-    except Exception as e:
-        print(f"An error occurred in {filename}: {e}")
+    f.close()
+    f_w.close()
 
 
 def check_file(hdf5_path, verbose = True):

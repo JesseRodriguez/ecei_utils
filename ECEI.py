@@ -88,7 +88,6 @@ def SNR_Yilun(signal, visual = False):
     leading scientist who developed key improvements to the ECEI diagnostic.
     This way of approaching SNR is important because the noise during a shot
     varies strongly with time.
-
     Args:
         signal: 1D numpy array of signal values
     """
@@ -156,7 +155,7 @@ def remove_spikes_robust_Z(data, dt = 1/100000, threshold = 3):
     """
     remove outliers using a robust Z-score method
     """
-    N = 50
+    N = 100
     T_warmup = int((50/1000)/dt)
     #print(T_warmup)
     for i in range(data.shape[0]-T_warmup):
@@ -190,6 +189,61 @@ def remove_spikes_robust_Z_pandas(data, dt=1/100000, threshold=3, N=50):
             data[i] = data[i-1]
 
 
+def remove_spikes_standard_Z_pandas(data, dt=1/100000, threshold=1.5, window=50):
+    """
+    Remove outliers using a standard Z-score method with a strictly causal rolling window.
+    
+    Parameters:
+    - data: NumPy array of data points.
+    - dt: Time step duration.
+    - threshold: Z-score threshold for detecting outliers.
+    - window: Size of the rolling window for calculating mean and std. dev.
+    """
+    T_warmup = int((50/1000)/dt)
+    s = pd.Series(data)
+    
+    # Calculate rolling mean and std. dev. with a strictly causal window
+    rolling_mean = s.rolling(window=window, min_periods=1, center=False).mean()
+    rolling_std = s.rolling(window=window, min_periods=1, center=False).std(ddof=0)
+    
+    # Calculate Z-scores
+    Z_scores = (s - rolling_mean) / (rolling_std + 1e-8)  # Avoid division by zero
+    
+    # Replace outliers with the previous value, starting after the warmup period
+    for i in range(T_warmup, len(s)):
+        if abs(Z_scores[i]) > threshold:
+            data[i] = data[i-1]
+    
+
+def remove_spikes_custom_Z(data, dt=1/100000, threshold=3, window=50):
+    """
+    Remove outliers using a standard Z-score method with a strictly causal rolling window.
+    
+    Parameters:
+    - data: NumPy array of data points.
+    - dt: Time step duration.
+    - threshold: Z-score threshold for detecting outliers.
+    - window: Size of the rolling window for calculating mean and std. dev.
+    """
+    T_warmup = int((50/1000)/dt)
+    for i in range(data.shape[0]-T_warmup):
+        I = i+T_warmup
+        if i == 0:
+            mean = np.mean(data[I-window:I])
+            var = np.var(data[I-window:I])
+        else:
+            mean = mean_old + (data[I-1]-data[I-window])/window
+            var = var_old + mean_old**2 - mean**2 + (data[I-1]**2-data[I-window]**2)/window
+
+
+        Z = (data[I] - mean)/(var**0.5 + 1e-8)
+        if Z > threshold:
+            data[I] = data[I-1]
+
+        mean_old = mean
+        var_old = var
+
+
 def remove_spikes_in_file(filename, data_dir, save_dir):
     """
     Run the routine to remove voltage spikes on a single file
@@ -209,7 +263,7 @@ def remove_spikes_in_file(filename, data_dir, save_dir):
                 if key != 'time' and not key.startswith('missing'):
                     data = np.asarray(f.get(key))
                     #print('removing spikes in ',key)
-                    remove_spikes_robust_Z(data, dt)
+                    remove_spikes_custom_Z(data, dt)
                     #print('removed')
                     f_w.create_dataset(key, data = data)
                 if key.startswith('missing'):
@@ -1845,7 +1899,7 @@ class ECEI:
 
 
     def Load_Channel(self, shot, data_dir, channel, units = 'dT', features = 10**4,\
-            d_sample = 1, rm_spikes = False):
+            d_sample = 1, rm_spikes = False, threshold = 3):
         """
         Get a 1D numpy array for a single channel.
 
@@ -1858,19 +1912,21 @@ class ECEI:
         f = h5py.File(shot_file, 'r')
 
         data = np.asarray(f.get('"'+self.side+channel+'"'))
-        time = np.asarray(f.get('time'))
+        time_s = np.asarray(f.get('time'))
 
-        fs_start = 1/(time[1]-time[0])
+        fs_start = 1/(time_s[1]-time_s[0])
         n = int(math.log10(d_sample))
         if units == 'dT':
-            data = self.Convert_to_dT(data, time, features)
+            data = self.Convert_to_dT(data, time_s, features)
         data_ = np.copy(data)
-        time_ = np.copy(time)
+        time_ = np.copy(time_s)
         for _ in range(n):
             data_, time_ = downsample_signal(data_, fs_start, 10, time_)
             fs_start = fs_start/10
         if rm_spikes:
-            remove_spikes_robust_Z(data_)
+            t = time.time()
+            remove_spikes_custom_Z(data_, threshold = threshold)
+            print(f"{time.time()-t} seconds")
             return data_, time_
         else:
             return data_, time_

@@ -90,6 +90,8 @@ def SNR_Yilun(signal, visual = False):
     varies strongly with time.
     Args:
         signal: 1D numpy array of signal values
+        visual: bool, for plotting purposes, if you want to see how SNR 
+                changes with time.
     """
     M = signal.shape[0]
     N = int(M/200)
@@ -217,7 +219,10 @@ def remove_spikes_standard_Z_pandas(data, dt=1/100000, threshold=1.5, window=50)
 
 def remove_spikes_custom_Z(data, dt=1/100000, threshold=3, window=50):
     """
-    Remove outliers using a standard Z-score method with a strictly causal rolling window.
+    Remove outliers using a custom Z-score method with a strictly causal
+    rolling window. The sauce that makes this function work is that outliers
+    aren't included when calculating the rolling window statistics. Makes
+    it more resistant to outliers.
     
     Parameters:
     - data: NumPy array of data points.
@@ -251,16 +256,20 @@ def remove_spikes_in_file(filename, data_dir, save_dir):
     if np.random.uniform() < 1/64:
         print("Removing spikes in "+filename)
 
+    f = None
+    f_w = None
     try:
         f = h5py.File(os.path.join(data_dir, filename), 'r')
     except Exception as e:
         print(f"An error occurred while opening {filename} in {data_dir}: {e}")
+        return
 
     try:
         f_w = h5py.File(os.path.join(save_dir, filename), 'a')
     except Exception as e:
         print(f"An error occurred while opening {filename} in {save_dir}: {e}")
-        #f_w.close()
+        if f_w is not None:
+            f_w.close()
         os.remove(os.path.join(save_dir, filename))
         remove_spikes_in_file(filename, data_dir, save_dir)
 
@@ -270,30 +279,34 @@ def remove_spikes_in_file(filename, data_dir, save_dir):
             f_w.create_dataset('time', data = t)
         except Exception as e:
             print(f"An error occurred while writing to {filename} in {save_dir}: {e}")
-            f_w.close()
+            if f_w is not None:
+                f_w.close()
             os.remove(os.path.join(save_dir, filename))
             remove_spikes_in_file(filename, data_dir, save_dir)
     dt = (t[int(t.shape[0]/2)]-t[int(t.shape[0]/2)-1])/1000
-
-    for key in f.keys():
-        if key != 'time' and not key.startswith('missing') and key not in f_w:
-            data = np.asarray(f.get(key))
-            remove_spikes_custom_Z(data, dt)
-            try:
-                f_w.create_dataset(key, data = data)
-            except Exception as e:
-                print(f"An error occurred while writing to {filename} in {save_dir}: {e}")
-                f_w.close()
-                os.remove(os.path.join(save_dir, filename))
-                remove_spikes_in_file(filename, data_dir, save_dir)
-        if key.startswith('missing') and key not in f_w:
-            try:
-                f_w.create_dataset(key, data = np.array([-1.0]))
-            except Exception as e:
-                print(f"An error occurred while writing to {filename} in {save_dir}: {e}")
-                f_w.close()
-                os.remove(os.path.join(save_dir, filename))
-                remove_spikes_in_file(filename, data_dir, save_dir)
+    
+    if f.keys() is not None:
+        for key in f.keys():
+            if key != 'time' and not key.startswith('missing') and key not in f_w:
+                data = np.asarray(f.get(key))
+                remove_spikes_custom_Z(data, dt)
+                try:
+                    f_w.create_dataset(key, data = data)
+                except Exception as e:
+                    print(f"An error occurred while writing to {filename} in {save_dir}: {e}")
+                    if f_w is not None:
+                        f_w.close()
+                    os.remove(os.path.join(save_dir, filename))
+                    remove_spikes_in_file(filename, data_dir, save_dir)
+            if key.startswith('missing') and key not in f_w:
+                try:
+                    f_w.create_dataset(key, data = np.array([-1.0]))
+                except Exception as e:
+                    print(f"An error occurred while writing to {filename} in {save_dir}: {e}")
+                    if f_w is not None:
+                        f_w.close()
+                    os.remove(os.path.join(save_dir, filename))
+                    remove_spikes_in_file(filename, data_dir, save_dir)
 
     f.close()
     f_w.close()
@@ -454,42 +467,45 @@ def process_file(filename, data_path):
     }
 
 
-def process_file_quality(shot_no, data_path, disrupt_list):
+def process_file_quality(shot_no, data_path, disrupt_list,\
+        check = [True, True, True, True], verbose = True):
     """
     Single step for reading out data quality information from a signle ECEI
     data file stored as an .hdf5.
     """
     if np.random.uniform() < 1/25:
         print("Processing shot no. "+str(shot_no))
-    # Process each file to determine missing channels and return counts
+
     filename = str(shot_no)+".hdf5"
+    NaN_by_chan, low_sig_by_chan, low_SNR_by_chan = {}, {}, {}
+    read_failure, ends = False, False
     try:
         with h5py.File(os.path.join(data_path, filename), 'r') as f:
-            NaN_by_chan = {}
-            low_sig_by_chan = {}
-            low_SNR_by_chan = {}
             for key in f.keys():
                 if key != 'time' and not key.startswith('missing'):
                     data = np.asarray(f.get(key))
-                    sig = np.sqrt(np.var(data))
-                    SNR = SNR_Yilun(data)
-                    NaN_by_chan[key[-9:]] = np.any(np.isnan(data))
-                    low_sig_by_chan[key[-9:]] = (sig < 0.001)
-                    low_SNR_by_chan[key[-9:]] = (SNR < 3)
-                elif key == 'time':
+                    if check[0]:
+                        sig = np.sqrt(np.var(data))
+                        low_sig_by_chan[key[-9:]] = (sig < 0.001)
+                    if check[1]:
+                        SNR = SNR_Yilun(data)
+                        low_SNR_by_chan[key[-9:]] = (SNR < 3)
+                    if check[2]:
+                        NaN_by_chan[key[-9:]] = np.any(np.isnan(data))
+                elif key == 'time' and check[3]:
                     time = np.asarray(f.get(key))
                     if shot_no in disrupt_list[:,0]:
                         i_disrupt = np.where(disrupt_list[:,0]==shot_no)[0][0]
-                        t_max = np.max(time)
                         t_disrupt = disrupt_list[i_disrupt,1]
-                        ends = (t_max < t_disrupt)
-                    else:
-                        ends = False
+                        ends = (np.max(time) < t_disrupt)
 
-    except:
+    except Exception as e:
+        if verbose:
+            print(f"An error occurred while processing {filename}: {e}")
         NaN_by_chan = {'read failure': None}
         low_sig_by_chan = {'read failure': None}
         low_SNR_by_chan = {'read failure': None}
+        read_failure = True
         ends = True
 
     # Return a dictionary of results for this file
@@ -498,7 +514,8 @@ def process_file_quality(shot_no, data_path, disrupt_list):
         'low_sig_by_chan': low_sig_by_chan,
         'low_SNR_by_chan': low_SNR_by_chan,
         'NaN_by_chan': NaN_by_chan,
-        'before_t_disrupt': ends
+        'before_t_disrupt': ends,
+        'read failure': read_failure
     }
 
 
@@ -1362,7 +1379,7 @@ class ECEI:
               .format(int(num_shots))+data_path)
         t_b = time.time()
 
-        assert cpu_use < 1
+        assert cpu_use <= 1
         use_cores = max(1, int((cpu_use)*mp.cpu_count()))
         print(f"Running on {use_cores} processes.")
         with ProcessPoolExecutor(max_workers = use_cores) as executor:
@@ -1592,7 +1609,7 @@ class ECEI:
 
     def Generate_Quality_Report_Parallel(self, todays_date, disrupt_list,\
             shot_list, data_path = os.getcwd(), output_path = os.getcwd(),\
-            cpu_use = 0.8):
+            cpu_use = 0.8, check = [True, True, True, True], verbose = True):
         """
         Creates a report of missing data in a more readable format.
 
@@ -1620,40 +1637,46 @@ class ECEI:
                 low_sig_chan_count = 0
                 low_SNR_chan_count = 0
                 NaN_present = False
-                if 'read failure' in result['NaN_by_chan']:
-                    print(result['filename']+" had a read error.")
+                if result['read failure']:
+                    if verbose:
+                        print(result['filename']+" had a read error.")
                     combined['read_error_list'].append(shot_no)
                 else:
-                    for chan, NaN in result['NaN_by_chan'].items():
-                        if chan not in combined['NaN_by_chan']:
-                            combined['NaN_by_chan'][chan] = 0
-                        if NaN:
-                            combined['NaN_by_chan'][chan] += 1
-                            NaN_present = True
-                    for chan, sig in result['low_sig_by_chan'].items():
-                        if chan not in combined['low_sig_by_chan']:
-                            combined['low_sig_by_chan'][chan] = 0
-                        if sig:
-                            combined['low_sig_by_chan'][chan] += 1
-                            low_sig_chan_count += 1
-                    for chan, SNR in result['low_SNR_by_chan'].items():
-                        if chan not in combined['low_SNR_by_chan']:
-                            combined['low_SNR_by_chan'][chan] = 0
-                        if SNR:
-                            combined['low_SNR_by_chan'][chan] += 1
-                            low_SNR_chan_count += 1
+                    if check[2]:
+                        for chan, NaN in result['NaN_by_chan'].items():
+                            if chan not in combined['NaN_by_chan']:
+                                combined['NaN_by_chan'][chan] = 0
+                            if NaN:
+                                combined['NaN_by_chan'][chan] += 1
+                                NaN_present = True
+                        if shot_no not in combined['NaN_list'] and NaN_present:
+                            combined['NaN_list'].append(shot_no)
 
-                    if shot_no not in combined['NaN_list'] and NaN_present:
-                        combined['NaN_list'].append(shot_no)
-                    if shot_no not in combined['low_sig_list'] and\
-                            low_sig_chan_count >= 80:
-                        combined['low_sig_list'].append(shot_no)
-                    if shot_no not in combined['low_sig_list'] and\
-                            low_SNR_chan_count >= 80:
-                        combined['low_SNR_list'].append(shot_no)
+                    if check[0]:
+                        for chan, sig in result['low_sig_by_chan'].items():
+                            if chan not in combined['low_sig_by_chan']:
+                                combined['low_sig_by_chan'][chan] = 0
+                            if sig:
+                                combined['low_sig_by_chan'][chan] += 1
+                                low_sig_chan_count += 1
+                        if shot_no not in combined['low_sig_list'] and\
+                                low_sig_chan_count >= 80:
+                            combined['low_sig_list'].append(shot_no)
 
-                    if result['before_t_disrupt']:
-                        combined['t_disrupt_list'].append(shot_no)
+                    if check[1]:
+                        for chan, SNR in result['low_SNR_by_chan'].items():
+                            if chan not in combined['low_SNR_by_chan']:
+                                combined['low_SNR_by_chan'][chan] = 0
+                            if SNR:
+                                combined['low_SNR_by_chan'][chan] += 1
+                                low_SNR_chan_count += 1
+                        if shot_no not in combined['low_sig_list'] and\
+                                low_SNR_chan_count >= 80:
+                            combined['low_SNR_list'].append(shot_no)
+
+                    if check[3]:
+                        if result['before_t_disrupt']:
+                            combined['t_disrupt_list'].append(shot_no)
 
             return combined
 
@@ -1663,7 +1686,7 @@ class ECEI:
               .format(int(num_shots))+data_path)
         t_b = time.time()
 
-        assert cpu_use < 1
+        assert cpu_use <= 1
         use_cores = max(1, int((cpu_use)*mp.cpu_count()))
         print(f"Running on {use_cores} processes.")
         with ProcessPoolExecutor(max_workers = use_cores) as executor:
@@ -1691,84 +1714,97 @@ class ECEI:
         report.write('This data quality report was generated using the '+\
                      'contents of '+output_path+'\non '+todays_date+'.\n\n')
 
-        report.write('Number of shots with NaNs present: {}\n'.format(\
+        if check[2]:
+            report.write('Number of shots with NaNs present: {}\n'.format(\
                      int(len(combined['NaN_list']))))
-        report.write('Number of shots with >=80 channels with a std. dev. less than 1 mV: {}\n'.format(\
+        if check[0]:
+            report.write('Number of shots with >=80 channels with a std. dev. less than 1 mV: {}\n'.format(\
                      int(len(combined['low_sig_list']))))
-        report.write('Number of shots with >=80 channels with a Yilun SNR less than 3: {}\n'.format(\
+        if check[1]:
+            report.write('Number of shots with >=80 channels with a Yilun SNR less than 3: {}\n'.format(\
                      int(len(combined['low_SNR_list']))))
-        report.write('Number of disruptive shots that end before t_disrupt: {}\n'.format(\
+        if check[3]:
+            report.write('Number of disruptive shots that end before t_disrupt: {}\n'.format(\
                      int(len(combined['t_disrupt_list']))))
         report.write('_'*80)
         report.write('\n\n')
-        report.write('Distribution by channel of NaN presence in shots with '+\
+        if check[2]:
+            report.write('Distribution by channel of NaN presence in shots with '+\
                      'NaNs present:\n')
-        most_NaNs = 0
-        for key in combined['NaN_by_chan']:
-            if combined['NaN_by_chan'][key] > most_NaNs:
-                most_NaNs = combined['NaN_by_chan'][key]
-        if most_NaNs == 0:
-            most_NaNs = 1
+            most_NaNs = 0
+            for key in combined['NaN_by_chan']:
+                if combined['NaN_by_chan'][key] > most_NaNs:
+                    most_NaNs = combined['NaN_by_chan'][key]
+            if most_NaNs == 0:
+                most_NaNs = 1
 
-        for i in range(20):
-            for j in range(8):
-                key = '"{}{:02d}{:02d}"'.format(self.side, i+3, j+1)
-                bar_length = int(combined['NaN_by_chan'][key]/most_NaNs*50)
-                bar = '█'*bar_length
-                report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
+            for i in range(20):
+                for j in range(8):
+                    key = '"{}{:02d}{:02d}"'.format(self.side, i+3, j+1)
+                    bar_length = int(combined['NaN_by_chan'][key]/most_NaNs*50)
+                    bar = '█'*bar_length
+                    report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
                         str(int(combined['NaN_by_chan'][key]))+' | '+bar+'\n')
 
-        report.write('_'*80)
-        report.write('\n\n')
-        report.write('Distribution by channel of low std. dev. in shots with '+\
-                     'channels with a std. dev. smaller than 1 mV:\n')
-        most_lowsig = 0
-        for key in combined['low_sig_by_chan']:
-            if combined['low_sig_by_chan'][key] > most_lowsig:
-                most_lowsig = combined['low_sig_by_chan'][key]
-        if most_lowsig == 0:
-            most_lowsig = 1
+            report.write('_'*80)
+            report.write('\n\n')
 
-        for i in range(20):
-            for j in range(8):
-                key = '"{}{:02d}{:02d}"'.format(self.side, i+3, j+1)
-                bar_length = int(combined['low_sig_by_chan'][key]/most_lowsig*50)
-                bar = '█'*bar_length
-                report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
+        if check[0]:
+            report.write('Distribution by channel of low std. dev. in shots with '+\
+                     'channels with a std. dev. smaller than 1 mV:\n')
+            most_lowsig = 0
+            for key in combined['low_sig_by_chan']:
+                if combined['low_sig_by_chan'][key] > most_lowsig:
+                    most_lowsig = combined['low_sig_by_chan'][key]
+            if most_lowsig == 0:
+                most_lowsig = 1
+
+            for i in range(20):
+                for j in range(8):
+                    key = '"{}{:02d}{:02d}"'.format(self.side, i+3, j+1)
+                    bar_length = int(combined['low_sig_by_chan'][key]/most_lowsig*50)
+                    bar = '█'*bar_length
+                    report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
                         str(int(combined['low_sig_by_chan'][key]))+' | '+bar+'\n')
 
-        report.write('_'*80)
-        report.write('\n\n')
-        report.write('Distribution by channel of low Yilun SNR in shots with '+\
-                     'channels with Yilun SNR smaller than 3:\n')
-        most_lowSNR = 0
-        for key in combined['low_SNR_by_chan']:
-            if combined['low_SNR_by_chan'][key] > most_lowSNR:
-                most_lowSNR = combined['low_SNR_by_chan'][key]
-        if most_lowSNR == 0:
-            most_lowSNR = 1
+            report.write('_'*80)
+            report.write('\n\n')
 
-        for i in range(20):
-            for j in range(8):
-                key = '"{}{:02d}{:02d}"'.format(self.side, i+3, j+1)
-                bar_length = int(combined['low_SNR_by_chan'][key]/most_lowSNR*50)
-                bar = '█'*bar_length
-                report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
+        if check[1]:
+            report.write('Distribution by channel of low Yilun SNR in shots with '+\
+                     'channels with Yilun SNR smaller than 3:\n')
+            most_lowSNR = 0
+            for key in combined['low_SNR_by_chan']:
+                if combined['low_SNR_by_chan'][key] > most_lowSNR:
+                    most_lowSNR = combined['low_SNR_by_chan'][key]
+            if most_lowSNR == 0:
+                most_lowSNR = 1
+
+            for i in range(20):
+                for j in range(8):
+                    key = '"{}{:02d}{:02d}"'.format(self.side, i+3, j+1)
+                    bar_length = int(combined['low_SNR_by_chan'][key]/most_lowSNR*50)
+                    bar = '█'*bar_length
+                    report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
                         str(int(combined['low_SNR_by_chan'][key]))+' | '+bar+'\n')
 
         report.close()
 
-        NaN_list = np.sort(combined['NaN_list']).astype(int)
-        low_sig_list = np.sort(combined['low_sig_list']).astype(int)
-        low_SNR_list = np.sort(combined['low_SNR_list']).astype(int)
-        t_disrupt_list = np.sort(combined['t_disrupt_list']).astype(int)
-        read_error_list = np.sort(combined['read_error_list']).astype(int)
-
-        np.savetxt(output_path+'/contains_NaN.txt', NaN_list, fmt='%i')
-        np.savetxt(output_path+'/low_std_dev.txt', low_sig_list, fmt='%i')
-        np.savetxt(output_path+'/low_SNR.txt', low_SNR_list, fmt='%i')
-        np.savetxt(output_path+'/ends_before_t_disrupt.txt', t_disrupt_list,\
+        if check[2]:
+            NaN_list = np.sort(combined['NaN_list']).astype(int)
+            np.savetxt(output_path+'/contains_NaN.txt', NaN_list, fmt='%i')
+        if check[0]:
+            low_sig_list = np.sort(combined['low_sig_list']).astype(int)
+            np.savetxt(output_path+'/low_std_dev.txt', low_sig_list, fmt='%i')
+        if check[1]:
+            low_SNR_list = np.sort(combined['low_SNR_list']).astype(int)
+            np.savetxt(output_path+'/low_SNR.txt', low_SNR_list, fmt='%i')
+        if check[3]:
+            t_disrupt_list = np.sort(combined['t_disrupt_list']).astype(int)
+            np.savetxt(output_path+'/ends_before_t_disrupt.txt', t_disrupt_list,\
                    fmt='%i')
+
+        read_error_list = np.sort(combined['read_error_list']).astype(int)
         np.savetxt(output_path+'/read_error_list.txt', read_error_list,\
                    fmt='%i')
 

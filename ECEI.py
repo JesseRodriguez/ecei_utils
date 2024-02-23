@@ -56,6 +56,9 @@ def downsample_signal(signal, orig_sample_rate, decimation_factor,\
     target_sample_rate = orig_sample_rate/decimation_factor
     
     # Calculate filter coefficients
+    if decimation_factor == 1:
+        return signal, time
+
     if decimation_factor < 6:
         filter_coeffs = scipy.signal.firwin(decimation_factor*2+1,\
                         target_sample_rate/2, window = ('kaiser',1.75),\
@@ -88,6 +91,7 @@ def SNR_Yilun(signal, visual = False):
     leading scientist who developed key improvements to the ECEI diagnostic.
     This way of approaching SNR is important because the noise during a shot
     varies strongly with time.
+    
     Args:
         signal: 1D numpy array of signal values
         visual: bool, for plotting purposes, if you want to see how SNR 
@@ -124,6 +128,54 @@ def SNR_Yilun(signal, visual = False):
     
     SNR_estimate = np.mean(np.abs(T_avg))/np.std(fluctuation)
 
+    return SNR_estimate
+
+
+def SNR_Yilun_cheap(signal, visual = False):
+    """
+    This function yields an estimate of the signal to noise ratio of a 1D time
+    series as a function of time. The method was supplied by Yilun Zhu, a
+    leading scientist who developed key improvements to the ECEI diagnostic.
+    This way of approaching SNR is important because the noise during a shot
+    varies strongly with time.
+    
+    Args:
+        signal: 1D numpy array of signal values
+        visual: bool, for plotting purposes, if you want to see how SNR 
+                changes with time.
+    """
+    #print("running cheap SNR version")
+    M = signal.shape[0]
+    bins = 200
+    N = int(M/bins)
+    if N < 10:
+        raise RuntimeError("Signal doesn't have enough timesteps for "+\
+                "meaningful binning.")
+
+    pad_size = N - (M % N) if M % N != 0 else 0
+    # Pad the signal by repeating the last value 'pad_size' times
+    padded_signal = np.pad(signal, (0, pad_size), 'edge')
+
+    # Reshape padded signal into a 2D array of shape (bins, N), where bins is M/N
+    reshaped_signal = padded_signal.reshape(-1, N)
+
+    # Calculate the mean of each row (bin) to get the binned signal
+    S_avg = reshaped_signal.mean(axis=1)
+
+    noise = np.zeros_like(S_avg)
+    std = np.copy(noise)
+    for i in range(bins):
+        fluctuation = signal[N*i:N*(i+1)] - S_avg[i]
+        noise[i] = np.max(fluctuation) - np.min(fluctuation)
+        std[i] = np.std(fluctuation)
+
+    SNR_estimate = np.mean(np.abs(S_avg)/std)
+
+    if visual:
+        SNR = np.abs(S_avg)/noise
+        SNR_worst_case = np.mean(SNR)
+        return SNR, SNR_estimate, SNR_worst_case
+    
     return SNR_estimate
 
 
@@ -438,6 +490,45 @@ def downsample_file(filename, decimation_factor, data_dir, save_dir):
             else:
                 pass
 
+
+    except Exception as e:
+        print(f"An error occurred in {filename}: {e}")
+
+
+def FFT_file(filename, data_dir, save_dir):
+    """
+    Downsample ECEI data from a single file
+    """
+    if np.random.uniform() < 1/25:
+        print("Downsampling "+filename)
+    try:
+        if not check_file(os.path.join(save_dir, filename), verbose = False):
+            f_w = h5py.File(os.path.join(save_dir, filename), 'a')
+            f = h5py.File(os.path.join(data_dir, filename), 'r')
+
+            time = np.asarray(f.get('time'))
+            freqs = np.fft.fftfreq(len(time), time[1]-time[0])
+            f_w.create_dataset('freqs', data = freqs)
+            for key in f.keys():
+                if key != 'time' and not key.startswith('missing'):
+                    data = np.asarray(f.get(key))
+                    fft = np.fft.fft(data)
+                    power = np.abs(fft)**2
+                    f_w.create_dataset(key, data = power)
+                if key.startswith('missing'):
+                    f_w.create_dataset(key, data = np.array([-1.0]))
+
+            f.close()
+            f_w.close()
+        else:
+            f = h5py.File(os.path.join(save_dir, filename), 'r')
+            num_chans = len(f.keys())
+            if num_chans < 161:
+                os.remove(os.path.join(save_dir, filename))
+                f.close()
+                FFT_file(filename, data_dir, save_dir)
+            else:
+                pass
 
     except Exception as e:
         print(f"An error occurred in {filename}: {e}")
@@ -918,6 +1009,33 @@ class ECEI:
         T = t_e-t_b
 
         print("Finished downsampling signals in {} seconds.".format(T))
+
+
+    def FFT_Folder(self, data_dir, save_dir, cpu_use = 0.8):
+        """
+        Computes power spectrum for  all the ECEI data in one directory.
+        """
+        file_list = [f for f in os.listdir(data_dir) if f.endswith('.hdf5')]
+        num_shots = len(file_list)
+        print("Computing the power spectrum for the {} shots in "\
+              .format(int(num_shots))+data_dir)
+        t_b = time.time()
+
+        assert cpu_use <= 1
+        use_cores = max(1, int((cpu_use)*mp.cpu_count()))
+        print(f"Running on {use_cores} processes.")
+        with ProcessPoolExecutor(max_workers = use_cores) as executor:
+            # Process all files in parallel and collect results
+            try:
+                results = list(executor.map(FFT_file, file_list,\
+                        [data_dir]*num_shots, [save_dir]*num_shots))
+            except Exception as e:
+                print(f"An error occurred: {e}")
+
+        t_e = time.time()
+        T = t_e-t_b
+
+        print("Finished computing spectra in {} seconds.".format(T))
 
 
     def Remove_Spikes_Folder(self, data_dir, save_dir, cpu_use = 0.8,\
@@ -1914,7 +2032,7 @@ class ECEI:
 
 
     def Load_2D_Array(self, shot, data_dir, units = 'dT', features = 10**4,\
-            d_sample = 1, rm_spikes = False):
+            d_sample = 1, rm_spikes = False, threshold = 3):
         """
         Loads and returns a (num_timesteps, 20, 8) array of the ECEI data
         """
@@ -1938,7 +2056,7 @@ class ECEI:
                     data_, time_ = downsample_signal(data_, fs_start, 10, time_)
                     fs_start = fs_start/10
                 if rm_spikes:
-                    remove_spikes_robust_Z(data_)
+                    remove_spikes_custom_Z(data_, threshold = threshold)
                 array[:,XX,YY] = data_
             else:
                 array[:,XX,YY] = np.zeros_like(time[::d_sample])
@@ -1982,11 +2100,12 @@ class ECEI:
 
 
     def Visualize_SNR(self, shot, data_dir, save_dir = os.getcwd(),\
-            verbose = True, show = False):
+            verbose = True, show = False, rm_spikes = False):
         """
         Makes a plot and reports the SNR of a given shot.
         """
-        array, time = self.Load_2D_Array(shot, data_dir, units = 'T')
+        array, time = self.Load_2D_Array(shot, data_dir, units = 'T',\
+                                        rm_spikes = rm_spikes)
 
         fig = plt.figure()
         gs = fig.add_gridspec(4, 5, hspace=0.35, wspace=0)
@@ -1999,13 +2118,15 @@ class ECEI:
             col = plot_no%5
             XX = int(channel[-5:-3])-3
             YY = int(channel[-3:-1])-1
-            SNR, SNR_est, SNR_est2 = SNR_Yilun(array[:,XX,YY], visual = True)
+            SNR, SNR_est, SNR_est2 = SNR_Yilun_cheap(array[:,XX,YY], visual = True)
 
             if verbose:
                 print("SNR estimate in channel "+channel+":", SNR_est, SNR_est2)
 
-            ax[row,col].plot(time, SNR, label = 'YY = '+channel[-3:-1],\
+            ax[row,col].plot(SNR, label = 'YY = '+channel[-3:-1],\
                              linewidth = 0.4, alpha = 0.8)
+            #if col == 0:
+            #    y_bounds = (np.min(SNR), np.max(SNR))
             if count%8 == 0:
                 plot_no += 1
                 XX = channel[-5:-3]
@@ -2013,6 +2134,7 @@ class ECEI:
                 ax[row,col].set_title(title, fontsize = 5)
                 #ax[row,col].legend(prop={'size': 2.75})
                 ax[row,col].tick_params(width = 0.3)
+                #ax[row,col].set_ylim(y_bounds)
 
         fig.suptitle('SNR for Shot #{}'.format(int(shot)), fontsize = 10)
         for axs in ax.flat:
@@ -2033,7 +2155,10 @@ class ECEI:
         if show: 
             fig.show()
 
-        fig.savefig(save_dir+'/SNR_Shot_{}.pdf'.format(int(shot)))
+        if rm_spikes:
+            fig.savefig(save_dir+'/SNR_Shot_{}_nospikes.pdf'.format(int(shot)))
+        else:
+            fig.savefig(save_dir+'/SNR_Shot_{}.pdf'.format(int(shot)))
 
 
     def Make_ECEI_Movie(self, shot, data_dir, save_dir = os.getcwd(),\

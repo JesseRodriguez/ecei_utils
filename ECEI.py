@@ -20,6 +20,7 @@ from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 import h5py
 import scipy.signal
+from scipy.interpolate import interp1d
 import math
 try:
     import toksearch as ts
@@ -497,10 +498,10 @@ def downsample_file(filename, decimation_factor, data_dir, save_dir):
 
 def FFT_file(filename, data_dir, save_dir):
     """
-    Downsample ECEI data from a single file
+    Compute the power spectrum of the ECEI data from a single file
     """
-    if np.random.uniform() < 1/25:
-        print("Downsampling "+filename)
+    if np.random.uniform() < 1/5:
+        print("Computing power spectrum of "+filename)
     try:
         if not check_file(os.path.join(save_dir, filename), verbose = False):
             f_w = h5py.File(os.path.join(save_dir, filename), 'a')
@@ -521,14 +522,61 @@ def FFT_file(filename, data_dir, save_dir):
             f.close()
             f_w.close()
         else:
-            f = h5py.File(os.path.join(save_dir, filename), 'r')
-            num_chans = len(f.keys())
-            if num_chans < 161:
+            try:
+                f = h5py.File(os.path.join(save_dir, filename), 'r')
+                num_chans = len(f.keys())
+                if num_chans < 161:
+                    f.close()
+                    os.remove(os.path.join(save_dir, filename))
+                    FFT_file(filename, data_dir, save_dir)
+                else:
+                    pass
+            except Exception as e:
                 os.remove(os.path.join(save_dir, filename))
-                f.close()
                 FFT_file(filename, data_dir, save_dir)
-            else:
-                pass
+
+    except Exception as e:
+        print(f"An error occurred in {filename}: {e}")
+
+
+def FFT_interp_file(filename, freqs_main, data_dir, save_dir):
+    """
+    Interpolate ECEI power spectrum data from a single file
+    """
+    if np.random.uniform() < 1/5:
+        print("interpolating "+filename)
+    try:
+        if not check_file(os.path.join(save_dir, filename), verbose = False):
+            f_w = h5py.File(os.path.join(save_dir, filename), 'a')
+            f = h5py.File(os.path.join(data_dir, filename), 'r')
+
+            freqs = np.asarray(f.get('freqs'))
+            f_w.create_dataset('freqs', data = freqs_main)
+            for key in f.keys():
+                if key != 'freqs' and not key.startswith('missing'):
+                    power = np.asarray(f.get(key))
+                    interp_func = interp1d(freqs, power, kind='linear',\
+                            bounds_error=False, fill_value="extrapolate")
+                    interp_power = interp_func(freqs_main)
+                    f_w.create_dataset(key, data = interp_power)
+                if key.startswith('missing'):
+                    f_w.create_dataset(key, data = np.array([-1.0]))
+
+            f.close()
+            f_w.close()
+        else:
+            try:
+                f = h5py.File(os.path.join(save_dir, filename), 'r')
+                num_chans = len(f.keys())
+                if num_chans < 161:
+                    f.close()
+                    os.remove(os.path.join(save_dir, filename))
+                    FFT_interp_file(filename, freqs_main, data_dir, save_dir)
+                else:
+                    pass
+            except Exception as e:
+                os.remove(os.path.join(save_dir, filename))
+                FFT_interp_file(filename, freqs_main, data_dir, save_dir)
 
     except Exception as e:
         print(f"An error occurred in {filename}: {e}")
@@ -1036,6 +1084,47 @@ class ECEI:
         T = t_e-t_b
 
         print("Finished computing spectra in {} seconds.".format(T))
+
+
+    def FFT_interp_Folder(self, data_dir, save_dir, cpu_use = 0.8):
+        """
+        Unifies power spectra bins for all the ECEI data in one directory.
+        """
+        file_list = [f for f in os.listdir(data_dir) if f.endswith('.hdf5')]
+        num_shots = len(file_list)
+        print("Unifying the power spectra for the {} shots in "\
+              .format(int(num_shots))+data_dir)
+        t_b = time.time()
+
+        max_bins = 0
+        for filename in file_list:
+            try:
+                if filename.endswith('hdf5'):
+                    f = h5py.File(data_dir+'/'+filename, 'r')
+                    freqs = np.asarray(f.get('freqs'))
+                    n_bins = freqs.shape[0]
+                    if n_bins > max_bins:
+                        max_bins = n_bins
+                        freqs_main = np.copy(freqs)
+            except Exception as e:
+                print(f"An error occurred while opening {filename}: {e}")
+
+        assert cpu_use <= 1
+        use_cores = max(1, int((cpu_use)*mp.cpu_count()))
+        print(f"Running on {use_cores} processes.")
+        with ProcessPoolExecutor(max_workers = use_cores) as executor:
+            # Process all files in parallel and collect results
+            try:
+                results = list(executor.map(FFT_interp_file, file_list,\
+                        [freqs_main]*num_shots, [data_dir]*num_shots,\
+                        [save_dir]*num_shots))
+            except Exception as e:
+                print(f"An error occurred: {e}")
+
+        t_e = time.time()
+        T = t_e-t_b
+
+        print("Finished unifying spectra in {} seconds.".format(T))
 
 
     def Remove_Spikes_Folder(self, data_dir, save_dir, cpu_use = 0.8,\

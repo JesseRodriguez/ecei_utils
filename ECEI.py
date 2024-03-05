@@ -627,7 +627,7 @@ def process_file_quality(shot_no, data_path, disrupt_list,\
                         sig = np.sqrt(np.var(data))
                         low_sig_by_chan[key[-9:]] = (sig < 0.001)
                     if check[1]:
-                        SNR = SNR_Yilun(data)
+                        _, _, SNR = SNR_Yilun_cheap(data, visual = True)
                         low_SNR_by_chan[key[-9:]] = (SNR < 3)
                     if check[2]:
                         NaN_by_chan[key[-9:]] = np.any(np.isnan(data))
@@ -1895,7 +1895,6 @@ class ECEI:
 
             return combined
 
-        #file_list = [f for f in os.listdir(data_path) if f.endswith('.hdf5')]
         num_shots = len(shot_list)
         print("Generating data quality report for the {} shots in "\
               .format(int(num_shots))+data_path)

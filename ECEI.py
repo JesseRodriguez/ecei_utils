@@ -632,7 +632,7 @@ def process_file_quality(shot_no, data_path, disrupt_list,\
                     if check[2]:
                         NaN_by_chan[key[-9:]] = np.any(np.isnan(data))
                 elif key == 'time' and check[3]:
-                    time = np.asarray(f.get(key))
+                    time = np.asarray(f.get(key))/1000
                     if shot_no in disrupt_list[:,0]:
                         i_disrupt = np.where(disrupt_list[:,0]==shot_no)[0][0]
                         t_disrupt = disrupt_list[i_disrupt,1]

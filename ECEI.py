@@ -1029,6 +1029,14 @@ class ECEI:
     ###########################################################################
     ## Data Processing
     ###########################################################################
+    def Get_Sample_Rate(self, shot_path):
+        f = h5py.File(shot_path, 'r')
+        t = np.asarray(f.get('time'))
+        dt = (t[1]-t[0])/1000
+
+        return 1/dt
+
+
     def Downsample_Folder(self, data_dir, save_dir, decimation_factor,\
             cpu_use = 0.8):
         """

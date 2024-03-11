@@ -37,52 +37,53 @@ except ImportError:
 ## Utility Functions and Globals
 ################################################################################
 def downsample_signal(signal, orig_sample_rate, decimation_factor,\
-                        time = np.array([])):
+        time = np.array([])):
     """
     Downsample a given signal from original sample rate to target sample rate,
-    using a Kaiser window with beta = 3 and 12 taps for decimation factors 
-    between 6 and 10, and adjusting the filter when the decimation factor is
-    less than 6. This downsampling procedure is strictly causal.
-                                    
+    using a Kaiser window with beta = 2 and decimation_factor*4 + 1 taps. If 
+    your decimation factor is greater than 10, I'd recommend applying this 
+    function several times succeessively (for a decimation factor of 1000, for 
+    example, applying the function 3x gives a >40x speedup). This downsampling 
+    procedure is strictly causal and produces two time steps of signal delay 
+    at the target frequency.
+
     Parameters:
-        signal (numpy.array): The input signal
-        time (np.array): Input time series
-        orig_sample_rate (float): Original sampling rate (Hz)
-        decimation_factor (float): factor by which you want to downsample
-                                                            
+    signal (numpy.array): The input signal
+    time (np.array): Input time series
+    orig_sample_rate (float): Original sampling rate (Hz)
+    decimation_factor (float): factor by which you want to downsample
+
     Returns:
-        numpy.arrays: The downsampled signal and time series
+    numpy.arrays: The downsampled signal and time series
     """
-    # Calculate decimation factor
-    target_sample_rate = orig_sample_rate/decimation_factor
-    
-    # Calculate filter coefficients
-    if decimation_factor == 1:
-        return signal, time
-
-    if decimation_factor < 6:
-        filter_coeffs = scipy.signal.firwin(decimation_factor*2+1,\
-                        target_sample_rate/2, window = ('kaiser',1.75),\
-                        fs = orig_sample_rate)
-    elif decimation_factor > 10:
-        raise RuntimeError("It is not advised to use decimation factors "+\
-                          "greater than 10 with this downsampling function.\n"+\
-                          "Break the procedure into multiple steps.")
+    if decimation_factor <= 10:
+        filtered_signal = filter_signal(signal, orig_sample_rate,\
+                decimation_factor)
     else:
-        filter_coeffs = scipy.signal.firwin(12, target_sample_rate,\
-                        window = ('kaiser',3), fs = orig_sample_rate)
+        raise RuntimeError("It is not advised to use decimation factors greater than "+\
+                          "10 with this downsampling function.\n Break the procedure "+\
+                          "into multiple steps.")
 
-    # Apply the low-pass filter using lfilter to maintain strict causality
-    filtered_signal = scipy.signal.lfilter(filter_coeffs, [1.0], signal)
-                  
     # Decimate the filtered signal
     downsampled_signal = filtered_signal[::decimation_factor]
     if time.shape[0] > 0:
         time_ds = time[::decimation_factor]
     else:
         time_ds = np.array([])
-                                                          
+
     return downsampled_signal, time_ds
+
+
+def filter_signal(signal, orig_sample_rate, decimation_factor):
+    # Calculate decimation factor
+    target_sample_rate = orig_sample_rate/decimation_factor
+
+    # Calculate filter coefficients
+    filter_coeffs = scipy.signal.firwin(decimation_factor*4+1, target_sample_rate/2.25,\
+                        window = ('kaiser',2), fs = orig_sample_rate)
+
+    # Apply the low-pass filter to maintain strict causality
+    return scipy.signal.lfilter(filter_coeffs, [1.0], signal)
 
 
 def SNR_Yilun(signal, visual = False):

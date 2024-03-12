@@ -181,6 +181,60 @@ def SNR_Yilun_cheap(signal, visual = False):
     return SNR_estimate
 
 
+def SNR_Churchill(signal, time, t_end):
+    """
+    This function yields an estimate for the SNR for a single channel using the
+    same method that Churchill used for constructing his dataset in his 2020
+    paper.
+
+    Args:
+        signal: 1D numpy array of signal values
+        time: 1D numpy array of time series values
+        t_end: Time that the shot ends via ip
+    """
+    noise = np.std(data[np.where(time<0)[0]])
+    offset = np.mean(data[np.where(time<0)[0]])
+    SNR = (np.mean(data[np.where(time<t_end)[0]])-offset)/noise
+
+    return SNR
+
+
+def
+
+
+def t_end(ip, ip_t):
+    """
+    This function finds the time that a shot ends as defined by plasma current 
+    (PTDATA "IP") dropping below 100e3 (Churchill's Method)
+
+    Args:
+        ip: ip data series 1D
+        ip_t: ip time series 1D
+    """
+    return ip_t[np.where(np.abs(ip)>100e3)[0][-1]]
+
+
+def get_t_end_file(filename, data_dir):
+    """
+    Opens a plasma current file and determines the time of the end of the shot
+    """
+    if np.random.uniform() < 1/64:
+        print("Pulling t_end from "+filename)
+
+    try:
+        data = np.loadtxt(os.path.join(data_dir, filename))
+        ip = data[:,1]
+        time = data[:,0]
+    except Exception as e:
+        print(f"An error occurred while loading {filename} in {data_dir}: {e}")
+        return
+
+    if time.shape[0] == 1:
+        return 0
+    else:
+        return t_end(ip, time)
+
+
 def myclip(data, low, high):
     """
     Dumb clip for plotting purposes
@@ -607,8 +661,8 @@ def process_file(filename, data_path):
     }
 
 
-def process_file_quality(shot_no, data_path, disrupt_list,\
-        check = [True, True, True, True], verbose = True):
+def process_file_quality(shot_no, data_path, disrupt_list, t_end = 0,\
+        check = [True, True, True, True, True], verbose = True):
     """
     Single step for reading out data quality information from a signle ECEI
     data file stored as an .hdf5.
@@ -618,6 +672,7 @@ def process_file_quality(shot_no, data_path, disrupt_list,\
 
     filename = str(shot_no)+".hdf5"
     NaN_by_chan, low_sig_by_chan, low_SNR_by_chan = {}, {}, {}
+    low_C_SNR_by_chan = {}
     read_failure, ends = False, False
     try:
         with h5py.File(os.path.join(data_path, filename), 'r') as f:
@@ -632,12 +687,16 @@ def process_file_quality(shot_no, data_path, disrupt_list,\
                         low_SNR_by_chan[key[-9:]] = (SNR < 3)
                     if check[2]:
                         NaN_by_chan[key[-9:]] = np.any(np.isnan(data))
-                elif key == 'time' and check[3]:
+                elif key == 'time':
                     time = np.asarray(f.get(key))/1000
-                    if shot_no in disrupt_list[:,0]:
-                        i_disrupt = np.where(disrupt_list[:,0]==shot_no)[0][0]
-                        t_disrupt = disrupt_list[i_disrupt,1]
-                        ends = (np.max(time) < t_disrupt)
+                    if check[3]:
+                        if shot_no in disrupt_list[:,0]:
+                            i_disrupt = np.where(disrupt_list[:,0]==shot_no)[0][0]
+                            t_disrupt = disrupt_list[i_disrupt,1]
+                            ends = (np.max(time) < t_disrupt)
+                    if check[4]:
+                        SNR_C = SNR_Churchill(data, time, t_end)
+                        low_C_SNR_by_chan[key[-9:]] = (SNR < 3)
 
     except Exception as e:
         if verbose:
@@ -645,6 +704,7 @@ def process_file_quality(shot_no, data_path, disrupt_list,\
         NaN_by_chan = {'read failure': None}
         low_sig_by_chan = {'read failure': None}
         low_SNR_by_chan = {'read failure': None}
+        low_C_SNR_by_chan = {'read failure': None}
         read_failure = True
         ends = True
 
@@ -653,6 +713,7 @@ def process_file_quality(shot_no, data_path, disrupt_list,\
         'filename': filename,
         'low_sig_by_chan': low_sig_by_chan,
         'low_SNR_by_chan': low_SNR_by_chan,
+        'low_C_SNR_by_chan': low_C_SNR_by_chan,
         'NaN_by_chan': NaN_by_chan,
         'before_t_disrupt': ends,
         'read failure': read_failure
@@ -1036,6 +1097,37 @@ class ECEI:
         dt = (t[1]-t[0])/1000
 
         return 1/dt
+
+
+    def Get_t_end(self, data_dir, cpu_use = 0.8):
+        """
+        Goes through a given IP directory and creates a list with the time of
+        shot ending using the < 100e3 criterion.
+        """
+        file_list = [f for f in os.listdir(data_dir) if\
+                (f.endswith('.txt') and not f.startswith('t_end'))]
+        num_shots = len(file_list)
+        print("Finding t_end for the {} shots in "\
+              .format(int(num_shots))+data_dir)
+        t_b = time.time()
+
+        assert cpu_use <= 1
+        use_cores = max(1, int((cpu_use)*mp.cpu_count()))
+        print(f"Running on {use_cores} processes.")
+        with ProcessPoolExecutor(max_workers = use_cores) as executor:
+            # Process all files in parallel and collect results
+            try:
+                results = np.asarray(list(executor.map(get_t_end_file, file_list,\
+                        [data_dir]*num_shots)))
+            except Exception as e:
+                print(f"An error occurred: {e}")
+
+        t_e = time.time()
+        T = t_e-t_b
+
+        print("Finished getting end times in {} seconds.".format(T))
+
+        np.savetxt(data_dir+'t_end.txt', results)
 
 
     def Downsample_Folder(self, data_dir, save_dir, decimation_factor,\
@@ -2396,8 +2488,8 @@ class ECEI:
         t_e = time.time()
         T = t_e-t_b
 
-        print("Downloaded {} out of {} signals in {} seconds."\
-              .format(missed[1]-missed[0], missed[1], T))
+        print("Downloaded signals in {} seconds."\
+              .format(T))
 
         return
 

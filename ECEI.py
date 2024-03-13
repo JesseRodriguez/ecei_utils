@@ -668,7 +668,7 @@ def process_file(filename, data_path):
     }
 
 
-def process_file_quality(shot_no, data_path, disrupt_list, t_end = 0,\
+def process_file_quality(shot_no, t_end, data_path, disrupt_list,\
         check = [True, True, True, True, True], verbose = True):
     """
     Single step for reading out data quality information from a signle ECEI
@@ -687,10 +687,17 @@ def process_file_quality(shot_no, data_path, disrupt_list, t_end = 0,\
                 if key != 'time' and not key.startswith('missing'):
                     data = np.asarray(f.get(key))
                     if check[0]:
-                        sig = np.sqrt(np.var(data))
+                        if t_end == 0:
+                            sig = np.sqrt(np.var(data))
+                        else:
+                            sig = np.sqrt(np.var(data[np.where(time<t_end)[0]]))
                         low_sig_by_chan[key[-9:]] = (sig < 0.001)
                     if check[1]:
-                        _, _, SNR = SNR_Yilun_cheap(data, visual = True)
+                        if t_end == 0:
+                            _, _, SNR = SNR_Yilun_cheap(data, visual = True)
+                        else:
+                            _, _, SNR = SNR_Yilun_cheap(data[np.where(time<t_end)[0]],\
+                                    visual = True)
                         low_SNR_by_chan[key[-9:]] = (SNR < 3)
                     if check[2]:
                         NaN_by_chan[key[-9:]] = np.any(np.isnan(data))
@@ -1138,6 +1145,8 @@ class ECEI:
         print("Finished getting end times in {} seconds.".format(T))
 
         np.savetxt(data_dir+'t_end.txt', sorted_results, fmt='%i %.8f')
+
+        return sorted_results
 
 
     def Downsample_Folder(self, data_dir, save_dir, decimation_factor,\
@@ -1927,7 +1936,8 @@ class ECEI:
 
     def Generate_Quality_Report_Parallel(self, todays_date, disrupt_list,\
             shot_list, data_path = os.getcwd(), output_path = os.getcwd(),\
-            cpu_use = 0.8, check = [True, True, True, True], verbose = True):
+            cpu_use = 0.8, check = [True, True, True, True, True],\
+            verbose = True, t_end = None):
         """
         Creates a report of missing data in a more readable format.
 
@@ -1943,6 +1953,7 @@ class ECEI:
                 'low_sig_by_chan': {},
                 'low_sig_list': [],
                 'low_SNR_by_chan': {},
+                'low_C_SNR_by_chan': {},
                 'low_SNR_list': [],
                 'NaN_by_chan': {},
                 'NaN_list': [],
@@ -1954,6 +1965,7 @@ class ECEI:
                 shot_no = int(result['filename'][:-5])
                 low_sig_chan_count = 0
                 low_SNR_chan_count = 0
+                low_C_SNR_chan_count = 0
                 NaN_present = False
                 if result['read failure']:
                     if verbose:
@@ -1988,9 +2000,20 @@ class ECEI:
                             if SNR:
                                 combined['low_SNR_by_chan'][chan] += 1
                                 low_SNR_chan_count += 1
-                        if shot_no not in combined['low_sig_list'] and\
+                        if shot_no not in combined['low_SNR_list'] and\
                                 low_SNR_chan_count >= 80:
                             combined['low_SNR_list'].append(shot_no)
+
+                    if check[4]:
+                        for chan, SNR in result['low_C_SNR_by_chan'].items():
+                            if chan not in combined['low_C_SNR_by_chan']:
+                                combined['low_C_SNR_by_chan'][chan] = 0
+                            if SNR:
+                                combined['low_C_SNR_by_chan'][chan] += 1
+                                low_C_SNR_chan_count += 1
+                        if shot_no not in combined['low_C_SNR_list'] and\
+                                low_C_SNR_chan_count >= 80:
+                            combined['low_C_SNR_list'].append(shot_no)
 
                     if check[3]:
                         if result['before_t_disrupt']:
@@ -2001,6 +2024,10 @@ class ECEI:
         num_shots = len(shot_list)
         print("Generating data quality report for the {} shots in "\
               .format(int(num_shots))+data_path)
+
+        if isinstance(t_end, str):
+            t_end = self.Get_t_end(t_end, cpu_use)
+
         t_b = time.time()
 
         assert cpu_use <= 1
@@ -2010,8 +2037,9 @@ class ECEI:
             # Process all files in parallel and collect results
             try:
                 # Process a subset of files for debugging purposes
-                results = list(executor.map(process_file_quality, shot_list, [data_path]*num_shots,\
-                        [disrupt_list]*num_shots))
+                results = list(executor.map(process_file_quality, shot_list, t_end,\
+                        [data_path]*num_shots, [disrupt_list]*num_shots,\
+                        [check]*num_shots))
             except Exception as e:
                 print(f"An error occurred: {e}")
 

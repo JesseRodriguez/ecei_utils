@@ -199,10 +199,9 @@ def SNR_Churchill(signal, time, t_end):
     return SNR
 
 
-def
 
 
-def t_end(ip, ip_t):
+def t_end(ip, ip_t, ptname = "IP"):
     """
     This function finds the time that a shot ends as defined by plasma current 
     (PTDATA "IP") dropping below 100e3 (Churchill's Method)
@@ -211,18 +210,26 @@ def t_end(ip, ip_t):
         ip: ip data series 1D
         ip_t: ip time series 1D
     """
-    return ip_t[np.where(np.abs(ip)>100e3)[0][-1]]
+    if ptname == "IP":
+        indices = np.where(np.abs(ip) > 100e3)[0]
+    elif ptname == "ipspr15V":
+        indices = np.where(np.abs(ip) > 1e-01)[0]
+
+    if indices.size > 0:
+        return ip_t[indices[-1]]
+    else:
+        return 0
 
 
 def get_t_end_file(filename, data_dir):
     """
     Opens a plasma current file and determines the time of the end of the shot
     """
-    if np.random.uniform() < 1/64:
+    if np.random.uniform() < 1:
         print("Pulling t_end from "+filename)
 
     try:
-        data = np.loadtxt(os.path.join(data_dir, filename))
+        data = np.loadtxt(os.path.join(data_dir, filename), ndmin = 2)
         ip = data[:,1]
         time = data[:,0]
     except Exception as e:
@@ -230,9 +237,9 @@ def get_t_end_file(filename, data_dir):
         return
 
     if time.shape[0] == 1:
-        return 0
+        return [int(filename[:-4]), 0]
     else:
-        return t_end(ip, time)
+        return [int(filename[:-4]), t_end(ip, time, data_dir.split('/')[-2])]
 
 
 def myclip(data, low, high):
@@ -1122,12 +1129,15 @@ class ECEI:
             except Exception as e:
                 print(f"An error occurred: {e}")
 
+        sorted_indices = np.argsort(results[:, 0])
+        sorted_results = results[sorted_indices]
+
         t_e = time.time()
         T = t_e-t_b
 
         print("Finished getting end times in {} seconds.".format(T))
 
-        np.savetxt(data_dir+'t_end.txt', results)
+        np.savetxt(data_dir+'t_end.txt', sorted_results, fmt='%i %.8f')
 
 
     def Downsample_Folder(self, data_dir, save_dir, decimation_factor,\

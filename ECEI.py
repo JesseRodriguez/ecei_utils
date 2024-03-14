@@ -171,17 +171,17 @@ def SNR_Yilun_cheap(signal, visual = False):
         noise[i] = np.max(fluctuation) - np.min(fluctuation)
         std[i] = np.std(fluctuation)
 
-    SNR_estimate = np.mean(np.abs(S_avg)/std)
+    SNR_estimate = np.mean(np.abs(S_avg)/(std+1e-12))
 
     if visual:
-        SNR = np.abs(S_avg)/noise
+        SNR = np.abs(S_avg)/(noise+1e-12)
         SNR_worst_case = np.mean(SNR)
         return SNR, SNR_estimate, SNR_worst_case
     
     return SNR_estimate
 
 
-def SNR_Churchill(signal, time, t_end):
+def SNR_Churchill(data, time, t_end):
     """
     This function yields an estimate for the SNR for a single channel using the
     same method that Churchill used for constructing his dataset in his 2020
@@ -194,11 +194,9 @@ def SNR_Churchill(signal, time, t_end):
     """
     noise = np.std(data[np.where(time<0)[0]])
     offset = np.mean(data[np.where(time<0)[0]])
-    SNR = (np.mean(data[np.where(time<t_end)[0]])-offset)/noise
+    SNR = (np.mean(data[np.where(time<t_end)[0]])-offset)/(noise+1e-12)
 
     return SNR
-
-
 
 
 def t_end(ip, ip_t, ptname = "IP"):
@@ -225,7 +223,7 @@ def get_t_end_file(filename, data_dir):
     """
     Opens a plasma current file and determines the time of the end of the shot
     """
-    if np.random.uniform() < 1:
+    if np.random.uniform() < 1/10:
         print("Pulling t_end from "+filename)
 
     try:
@@ -683,6 +681,7 @@ def process_file_quality(shot_no, t_end, data_path, disrupt_list,\
     read_failure, ends = False, False
     try:
         with h5py.File(os.path.join(data_path, filename), 'r') as f:
+            time = np.asarray(f.get('time'))/1000
             for key in f.keys():
                 if key != 'time' and not key.startswith('missing'):
                     data = np.asarray(f.get(key))
@@ -701,16 +700,15 @@ def process_file_quality(shot_no, t_end, data_path, disrupt_list,\
                         low_SNR_by_chan[key[-9:]] = (SNR < 3)
                     if check[2]:
                         NaN_by_chan[key[-9:]] = np.any(np.isnan(data))
+                    if check[4]:
+                        SNR_C = SNR_Churchill(data, time, t_end)
+                        low_C_SNR_by_chan[key[-9:]] = (SNR_C < 3)
                 elif key == 'time':
-                    time = np.asarray(f.get(key))/1000
                     if check[3]:
                         if shot_no in disrupt_list[:,0]:
                             i_disrupt = np.where(disrupt_list[:,0]==shot_no)[0][0]
                             t_disrupt = disrupt_list[i_disrupt,1]
                             ends = (np.max(time) < t_disrupt)
-                    if check[4]:
-                        SNR_C = SNR_Churchill(data, time, t_end)
-                        low_C_SNR_by_chan[key[-9:]] = (SNR < 3)
 
     except Exception as e:
         if verbose:
@@ -1955,6 +1953,7 @@ class ECEI:
                 'low_SNR_by_chan': {},
                 'low_C_SNR_by_chan': {},
                 'low_SNR_list': [],
+                'low_C_SNR_list': [],
                 'NaN_by_chan': {},
                 'NaN_list': [],
                 't_disrupt_list': [],
@@ -2037,9 +2036,9 @@ class ECEI:
             # Process all files in parallel and collect results
             try:
                 # Process a subset of files for debugging purposes
-                results = list(executor.map(process_file_quality, shot_list, t_end,\
-                        [data_path]*num_shots, [disrupt_list]*num_shots,\
-                        [check]*num_shots))
+                results = list(executor.map(process_file_quality, shot_list,\
+                        t_end[:,1], [data_path]*num_shots,\
+                        [disrupt_list]*num_shots, [check]*num_shots))
             except Exception as e:
                 print(f"An error occurred: {e}")
 
@@ -2068,6 +2067,9 @@ class ECEI:
         if check[1]:
             report.write('Number of shots with >=80 channels with a Yilun SNR less than 3: {}\n'.format(\
                      int(len(combined['low_SNR_list']))))
+        if check[4]:
+            report.write('Number of shots with >=80 channels with a Churchill SNR less than 3: {}\n'.format(\
+                     int(len(combined['low_C_SNR_list']))))
         if check[3]:
             report.write('Number of disruptive shots that end before t_disrupt: {}\n'.format(\
                      int(len(combined['t_disrupt_list']))))
@@ -2133,6 +2135,24 @@ class ECEI:
                     report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
                         str(int(combined['low_SNR_by_chan'][key]))+' | '+bar+'\n')
 
+        if check[4]:
+            report.write('Distribution by channel of low Churchill SNR in shots with '+\
+                     'channels with Churchill SNR smaller than 3:\n')
+            most_lowSNR = 0
+            for key in combined['low_C_SNR_by_chan']:
+                if combined['low_C_SNR_by_chan'][key] > most_lowSNR:
+                    most_lowSNR = combined['low_C_SNR_by_chan'][key]
+            if most_lowSNR == 0:
+                most_lowSNR = 1
+
+            for i in range(20):
+                for j in range(8):
+                    key = '"{}{:02d}{:02d}"'.format(self.side, i+3, j+1)
+                    bar_length = int(combined['low_C_SNR_by_chan'][key]/most_lowSNR*50)
+                    bar = '█'*bar_length
+                    report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
+                        str(int(combined['low_C_SNR_by_chan'][key]))+' | '+bar+'\n')
+
         report.close()
 
         if check[2]:
@@ -2144,6 +2164,9 @@ class ECEI:
         if check[1]:
             low_SNR_list = np.sort(combined['low_SNR_list']).astype(int)
             np.savetxt(output_path+'/low_SNR.txt', low_SNR_list, fmt='%i')
+        if check[4]:
+            low_C_SNR_list = np.sort(combined['low_C_SNR_list']).astype(int)
+            np.savetxt(output_path+'/low_Churchill_SNR.txt', low_C_SNR_list, fmt='%i')
         if check[3]:
             t_disrupt_list = np.sort(combined['t_disrupt_list']).astype(int)
             np.savetxt(output_path+'/ends_before_t_disrupt.txt', t_disrupt_list,\

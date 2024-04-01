@@ -343,18 +343,21 @@ def remove_spikes_custom_Z(data, dt=1/100000, threshold=3, window=50):
     - threshold: Z-score threshold for detecting outliers.
     - window: Size of the rolling window for calculating mean and std. dev.
     """
+    shift = np.min(data)
+
     T_warmup = int((50/1000)/dt)
     for i in range(data.shape[0]-T_warmup):
         I = i+T_warmup
         if i == 0:
-            mean = np.mean(data[I-window:I])
-            var = np.var(data[I-window:I])
+            mean = np.mean(data[I-window:I]-shift)
+            var = np.var(data[I-window:I]-shift)
         else:
             mean = mean_old + (data[I-1]-data[I-window])/window
-            var = var_old + mean_old**2 - mean**2 + (data[I-1]**2-data[I-window]**2)/window
+            var = var_old + mean_old**2 - mean**2 + ((data[I-1]-shift)**2\
+                  -(data[I-window]-shift)**2)/window
 
 
-        Z = (data[I] - mean)/(var**0.5 + 1e-8)
+        Z = np.abs(data[I] - shift - mean)/(var**0.5 + 1e-8)
         if Z > threshold:
             data[I] = data[I-1]
 
@@ -667,7 +670,7 @@ def process_file(filename, data_path):
 
 
 def process_file_quality(shot_no, t_end, data_path, disrupt_list,\
-        check = [True, True, True, True, True], verbose = True):
+        check = [True, True, True, True, True], T_SNR = 3, verbose = True):
     """
     Single step for reading out data quality information from a signle ECEI
     data file stored as an .hdf5.
@@ -697,12 +700,12 @@ def process_file_quality(shot_no, t_end, data_path, disrupt_list,\
                         else:
                             _, _, SNR = SNR_Yilun_cheap(data[np.where(time<t_end)[0]],\
                                     visual = True)
-                        low_SNR_by_chan[key[-9:]] = (SNR < 3)
+                        low_SNR_by_chan[key[-9:]] = (SNR < T_SNR)
                     if check[2]:
                         NaN_by_chan[key[-9:]] = np.any(np.isnan(data))
                     if check[4]:
                         SNR_C = SNR_Churchill(data, time, t_end)
-                        low_C_SNR_by_chan[key[-9:]] = (SNR_C < 3)
+                        low_C_SNR_by_chan[key[-9:]] = (SNR_C < T_SNR)
                 elif key == 'time':
                     if check[3]:
                         if shot_no in disrupt_list[:,0]:
@@ -1104,11 +1107,16 @@ class ECEI:
     ## Data Processing
     ###########################################################################
     def Get_Sample_Rate(self, shot_path):
-        f = h5py.File(shot_path, 'r')
-        t = np.asarray(f.get('time'))
+        try:
+            f = h5py.File(shot_path, 'r')
+            t = np.asarray(f.get('time'))
+        except Exception as e:
+            print(f"An error occurred while reading {shot_path}: {e}")
+            return None, None
+
         dt = (t[1]-t[0])/1000
 
-        return 1/dt
+        return 1/dt, t[0]
 
 
     def Get_t_end(self, data_dir, cpu_use = 0.8):
@@ -1935,7 +1943,7 @@ class ECEI:
     def Generate_Quality_Report_Parallel(self, todays_date, disrupt_list,\
             shot_list, data_path = os.getcwd(), output_path = os.getcwd(),\
             cpu_use = 0.8, check = [True, True, True, True, True],\
-            verbose = True, t_end = None):
+            verbose = True, t_end = None, T_SNR = 3, T_Chan = 80):
         """
         Creates a report of missing data in a more readable format.
 
@@ -1989,7 +1997,7 @@ class ECEI:
                                 combined['low_sig_by_chan'][chan] += 1
                                 low_sig_chan_count += 1
                         if shot_no not in combined['low_sig_list'] and\
-                                low_sig_chan_count >= 80:
+                                low_sig_chan_count >= T_chan:
                             combined['low_sig_list'].append(shot_no)
 
                     if check[1]:
@@ -2000,7 +2008,7 @@ class ECEI:
                                 combined['low_SNR_by_chan'][chan] += 1
                                 low_SNR_chan_count += 1
                         if shot_no not in combined['low_SNR_list'] and\
-                                low_SNR_chan_count >= 80:
+                                low_SNR_chan_count >= T_Chan:
                             combined['low_SNR_list'].append(shot_no)
 
                     if check[4]:
@@ -2011,7 +2019,7 @@ class ECEI:
                                 combined['low_C_SNR_by_chan'][chan] += 1
                                 low_C_SNR_chan_count += 1
                         if shot_no not in combined['low_C_SNR_list'] and\
-                                low_C_SNR_chan_count >= 80:
+                                low_C_SNR_chan_count >= T_Chan:
                             combined['low_C_SNR_list'].append(shot_no)
 
                     if check[3]:
@@ -2062,17 +2070,20 @@ class ECEI:
             report.write('Number of shots with NaNs present: {}\n'.format(\
                      int(len(combined['NaN_list']))))
         if check[0]:
-            report.write('Number of shots with >=80 channels with a std. dev. less than 1 mV: {}\n'.format(\
+            report.write('Number of shots with >='+str(T_chan)+\
+                    ' channels with a std. dev. less than 1 mV: {}\n'.format(\
                      int(len(combined['low_sig_list']))))
         if check[1]:
-            report.write('Number of shots with >=80 channels with a Yilun SNR less than 3: {}\n'.format(\
+            report.write('Number of shots with >='+str(T_chan)+\
+                    ' channels with a Yilun SNR less than 3: {}\n'.format(\
                      int(len(combined['low_SNR_list']))))
         if check[4]:
-            report.write('Number of shots with >=80 channels with a Churchill SNR less than 3: {}\n'.format(\
+            report.write('Number of shots with >='+str(T_chan)+\
+                    ' channels with a Churchill SNR less than 3: {}\n'.format(\
                      int(len(combined['low_C_SNR_list']))))
         if check[3]:
-            report.write('Number of disruptive shots that end before t_disrupt: {}\n'.format(\
-                     int(len(combined['t_disrupt_list']))))
+            report.write('Number of disruptive shots that end before '+\
+                    't_disrupt: {}\n'.format(int(len(combined['t_disrupt_list']))))
         report.write('_'*80)
         report.write('\n\n')
         if check[2]:
@@ -2119,7 +2130,7 @@ class ECEI:
 
         if check[1]:
             report.write('Distribution by channel of low Yilun SNR in shots with '+\
-                     'channels with Yilun SNR smaller than 3:\n')
+                     'channels with Yilun SNR smaller than '+str(T_SNR)+':\n')
             most_lowSNR = 0
             for key in combined['low_SNR_by_chan']:
                 if combined['low_SNR_by_chan'][key] > most_lowSNR:
@@ -2137,7 +2148,7 @@ class ECEI:
 
         if check[4]:
             report.write('Distribution by channel of low Churchill SNR in shots with '+\
-                     'channels with Churchill SNR smaller than 3:\n')
+                     'channels with Churchill SNR smaller than '+str(T_SNR)+':\n')
             most_lowSNR = 0
             for key in combined['low_C_SNR_by_chan']:
                 if combined['low_C_SNR_by_chan'][key] > most_lowSNR:
@@ -2160,13 +2171,16 @@ class ECEI:
             np.savetxt(output_path+'/contains_NaN.txt', NaN_list, fmt='%i')
         if check[0]:
             low_sig_list = np.sort(combined['low_sig_list']).astype(int)
-            np.savetxt(output_path+'/low_std_dev.txt', low_sig_list, fmt='%i')
+            np.savetxt(output_path+'/low_std_dev_C'+str(T_chan)+'.txt',\
+                    low_sig_list, fmt='%i')
         if check[1]:
             low_SNR_list = np.sort(combined['low_SNR_list']).astype(int)
-            np.savetxt(output_path+'/low_SNR.txt', low_SNR_list, fmt='%i')
+            np.savetxt(output_path+'/low_SNR_T'+str(T_SNR)+'_C'+str(T_chan)+\
+                    '.txt', low_SNR_list, fmt='%i')
         if check[4]:
             low_C_SNR_list = np.sort(combined['low_C_SNR_list']).astype(int)
-            np.savetxt(output_path+'/low_Churchill_SNR.txt', low_C_SNR_list, fmt='%i')
+            np.savetxt(output_path+'/low_Churchill_SNR_T'+str(T_SNR)+'_C'+\
+                    str(T_chan)+'.txt', low_C_SNR_list, fmt='%i')
         if check[3]:
             t_disrupt_list = np.sort(combined['t_disrupt_list']).astype(int)
             np.savetxt(output_path+'/ends_before_t_disrupt.txt', t_disrupt_list,\
@@ -2181,7 +2195,7 @@ class ECEI:
     ## Visualization
     ###########################################################################
     def Single_Shot_Plot(self, shot, data_path, save_dir = os.getcwd(),\
-                         show = False, d_sample = 10, rm_spikes=True):
+                         show = False, d_sample = 1, rm_spikes=False):
         """
         Plot voltage traces for a single shot, saves plot as a .pdf
 
@@ -2214,10 +2228,8 @@ class ECEI:
                 for _ in range(n):
                     data_, time_ = downsample_signal(data_, fs_start, 10, time_)
                     fs_start = fs_start/10
-                t0 = time.time()
                 if rm_spikes:
-                    remove_spikes_robust_Z(data_)
-                print(f"removed spikes in {channel} in {time.time()-t0} seconds.")
+                    remove_spikes_custom_Z(data_)
                 ax[row,col].plot(time_[:], data_,\
                                  label = 'YY = '+channel[-3:-1],\
                                  linewidth = 0.4, alpha = 0.8)
@@ -2324,6 +2336,7 @@ class ECEI:
             channel: str, format "XXYY", 03<=XX<=22, 01<=YY<=08, designates
                      channel
         """
+        print("loading chanel")
         shot_file = data_dir+'/'+str(int(shot))+'.hdf5'
         f = h5py.File(shot_file, 'r')
 
@@ -2369,6 +2382,7 @@ class ECEI:
             XX = int(channel[-5:-3])-3
             YY = int(channel[-3:-1])-1
             SNR, SNR_est, SNR_est2 = SNR_Yilun_cheap(array[:,XX,YY], visual = True)
+
 
             if verbose:
                 print("SNR estimate in channel "+channel+":", SNR_est, SNR_est2)

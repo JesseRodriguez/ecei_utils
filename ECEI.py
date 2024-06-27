@@ -19,8 +19,11 @@ import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 import h5py
-import scipy.signal
-from scipy.interpolate import interp1d
+try:
+    import scipy.signal
+    from scipy.interpolate import interp1d
+except:
+    pass
 import math
 try:
     import toksearch as ts
@@ -363,6 +366,115 @@ def remove_spikes_custom_Z(data, dt=1/100000, threshold=3, window=50):
 
         mean_old = mean
         var_old = var
+
+
+def create_felipe_structure(h5_file, t_disrupt):
+    h5_file.create_group('0D')
+    h5_file.create_group('1D')
+    h5_file.create_group('2D')
+    h5_file.create_dataset('t_disrupt', data = t_disrupt)
+    h5_file.create_dataset('t_start', data = 0.0)
+    h5_file['2D'].create_group('ecei')
+
+
+def convert_file_felipe_style(filename, data_dir, save_dir, t_end, t_disrupt,\
+        channels):
+    """
+    Convert old-school ECEI raw data file to format that is compatible with 
+    Felipe's loader
+    """
+    if np.random.uniform() < 1/25:
+        print("Converting "+filename)
+
+    file_path = os.path.join(data_dir, filename)
+    save_path = os.path.join(save_dir, filename)
+
+    if not check_file(save_path, verbose = False):
+        try:
+            if t_end == 0:
+                t_end = np.inf
+            else:
+                t_end *= 1000
+
+            if data_dir == save_dir:
+                backup_path = file_path+'.backup'
+                os.rename(file_path, backup_path)
+                f_r = h5py.File(backup_path, 'r')
+            else:
+                f_r = h5py.File(file_path, 'r')
+
+            f_w = h5py.File(save_path, 'w')
+            create_felipe_structure(f_w, t_disrupt)
+
+            time = np.asarray(f_r.get('time'))
+            length = time.shape[0]
+            dt = np.mean(time[1:101]-time[:100])/1000 # ms units
+            f_w['2D']['ecei'].create_dataset('freq', data = int(round(1/dt)))
+            t = time[np.where((time<=t_end) & (time >= 0.0))[0]]
+
+            means = np.zeros((20,8))
+            stds = np.zeros((20,8))
+            array = np.zeros((t.shape[0],20,8))
+
+            for channel in channels:
+                XX = int(channel[-5:-3])-3
+                YY = int(channel[-3:-1])-1
+                if channel in f_r.keys():
+                    data_ = np.asarray(f_r.get(channel))
+                    if data_.shape[0] != length:
+                        array[:,XX,YY] = np.zeros_like(t)
+                        means[XX,YY] = 0
+                        stds[XX,YY] = 0
+                    else:
+                        data = data_[np.where((time<=t_end) & (time >= 0.0))[0]]
+                        array[:,XX,YY] = data
+                        means[XX,YY] = np.mean(data)
+                        stds[XX,YY] = np.std(data)
+                else:
+                    array[:,XX,YY] = np.zeros_like(t)
+                    means[XX,YY] = 0
+                    stds[XX,YY] = 0
+
+            f_w['2D']['ecei'].create_dataset('channel_means', data = means)
+            f_w['2D']['ecei'].create_dataset('channel_stds', data = stds)
+            f_w['2D']['ecei'].create_dataset('signal', data = array)
+
+            f_w.close()
+            f_r.close()
+
+            if data_dir == save_dir:
+                os.remove(backup_path)
+
+            return
+        except Exception as e:
+            print("Trouble with "+filename+" even though destination was clear:", e)
+            return
+
+
+    else:
+        #print(filename+" already exists")
+        try:
+            f = h5py.File(save_path, 'r')
+            sig_array_shape = np.asarray(f['2D']['ecei']['signal']).shape
+            if sig_array_shape[1] == 20 and sig_array_shape[2] == 8:
+                #print('looks good.')
+                return
+            else:
+                print("no signal array with correct shape, removing and trying again.")
+                f.close()
+                os.remove(save_path)
+                convert_file_felipe_style(filename, data_dir, save_dir, t_end, t_disrupt,\
+                                    channels)
+        except Exception as e:
+            print("Couldn't open "+filename+":", e)
+            try:
+                f.close()
+            except:
+                pass
+            print("removing and trying again.")
+            os.remove(save_path)
+            convert_file_felipe_style(filename, data_dir, save_dir, t_end, t_disrupt,\
+                                    channels)
 
 
 def remove_spikes_in_file(filename, data_dir, save_dir):
@@ -1153,6 +1265,53 @@ class ECEI:
         np.savetxt(data_dir+'t_end.txt', sorted_results, fmt='%i %.8f')
 
         return sorted_results
+
+
+    def convert_folder_felipe_style(self, data_dir, save_dir, t_end, labels,\
+            cpu_use = 0.8):
+        """
+        Convert all files ina  directory to the format taht is compatible with
+        Felipe's loader.
+        """
+        file_list = ['142095.hdf5']#[f for f in os.listdir(data_dir) if f.endswith('.hdf5')]
+        num_shots = len(file_list)
+        print("Converting the {} shots in "\
+              .format(int(num_shots))+data_dir+" to Felipe format.")
+
+        if isinstance(t_end, str):
+            t_end = self.Get_t_end(t_end, cpu_use)
+        
+        t_end_aligned = np.zeros(num_shots)
+        t_disrupt_aligned = np.zeros(num_shots)
+        for i in range(len(file_list)):
+            shot_no = int(file_list[i][:-5])
+            idx = np.where(labels[:,0] == shot_no)[0][0]
+            t_disrupt_aligned[i] = labels[idx, 1]
+            if shot_no in t_end[:,0]:
+                idx = np.where(t_end[:,0] == shot_no)[0][0]
+                t_end_aligned[i] = t_end[idx, 1]
+            else:
+                t_end_aligned[i] = 0
+
+        t_b = time.time()
+
+        assert cpu_use <= 1
+        use_cores = max(1, int((cpu_use)*mp.cpu_count()))
+        print(f"Running on {use_cores} processes.")
+        with ProcessPoolExecutor(max_workers = use_cores) as executor:
+            # Process all files in parallel and collect results
+            try:
+                results = list(executor.map(convert_file_felipe_style, file_list,\
+                        [data_dir]*num_shots, [save_dir]*num_shots, t_end_aligned,\
+                        t_disrupt_aligned, [self.ecei_channels]*num_shots))
+            except Exception as e:
+                print(f"An error occurred: {e}")
+
+        # Now combined_results contains all the counts and lists you need
+        t_e = time.time()
+        T = t_e-t_b
+
+        print("Finished converting files in {} seconds.".format(T))
 
 
     def Downsample_Folder(self, data_dir, save_dir, decimation_factor,\

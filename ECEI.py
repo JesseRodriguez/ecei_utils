@@ -63,7 +63,7 @@ def downsample_signal(signal, orig_sample_rate, decimation_factor,\
         filtered_signal = filter_signal(signal, orig_sample_rate,\
                 decimation_factor)
     else:
-        raise RuntimeError("It is not advised to use decimation factors greater than "+\
+        print("WARNING: It is not advised to use decimation factors greater than "+\
                           "10 with this downsampling function.\n Break the procedure "+\
                           "into multiple steps.")
 
@@ -332,7 +332,7 @@ def remove_spikes_standard_Z_pandas(data, dt=1/100000, threshold=1.5, window=50)
         if abs(Z_scores[i]) > threshold:
             data[i] = data[i-1]
     
-
+    
 def remove_spikes_custom_Z(data, dt=1/100000, threshold=3, window=50):
     """
     Remove outliers using a custom Z-score method with a strictly causal
@@ -2420,7 +2420,7 @@ class ECEI:
             fig.show()
 
         fig.savefig(save_dir+'/Shot_{}.pdf'.format(int(shot)))
-        print(f"generated single shot plot in {time.time()-t0} seconds.")
+        print(f"generated single shot plot in {time.time()-T_0} seconds.")
 
 
     def Convert_to_dT(self, data, time, features = 10**4):
@@ -2486,7 +2486,7 @@ class ECEI:
 
 
     def Load_Channel(self, shot, data_dir, channel, units = 'dT', features = 10**4,\
-            d_sample = 1, rm_spikes = False, threshold = 3):
+            d_sample = 1, rm_spikes = False, dt = 1/100000, threshold = 3, window = 50):
         """
         Get a 1D numpy array for a single channel.
 
@@ -2495,7 +2495,7 @@ class ECEI:
             channel: str, format "XXYY", 03<=XX<=22, 01<=YY<=08, designates
                      channel
         """
-        print("loading chanel")
+        print("loading channel")
         shot_file = data_dir+'/'+str(int(shot))+'.hdf5'
         f = h5py.File(shot_file, 'r')
 
@@ -2513,7 +2513,7 @@ class ECEI:
             fs_start = fs_start/10
         if rm_spikes:
             t = time.time()
-            remove_spikes_custom_Z(data_, threshold = threshold)
+            remove_spikes_custom_Z(data_, threshold = threshold, window = window)
             print(f"{time.time()-t} seconds")
             return data_, time_
         else:

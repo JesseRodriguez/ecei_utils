@@ -2778,7 +2778,9 @@ class ECEI:
     def Acquire_Shots_D3D(self, shot_numbers, save_path = os.getcwd(),\
                           max_cores = 8, verbose = False, chan_lowlim = 3,\
                           chan_uplim = 22, d_sample = 1, try_again = False,\
-                          tksrch = False):
+                          tksrch = False, rm_spikes = False,\
+                          felipe_format = False, t_end = None,\
+                         t_disrupt = None):
         """
         Accepts a list of shot numbers and downloads the data. Returns nothing.
         Shots are saved in hdf5 format, downsampling is done BEFORE saving. 
@@ -2797,6 +2799,14 @@ class ECEI:
             d_sample: int, downsample factor, MUST BE IN FORM 10^y
             try_again: bool, tells script to try and download signals that were
                        found to be missing in a prior run.
+            rm_spikes: bool, tells script to remove spikes from the data
+            felipe_format: bool, tells script to save the data in Felipe's format
+            t_end: np.array, end time for the shot in seconds where the first
+                   column is the shot number and the second column is the end time
+                   (in seconds)
+            t_disrupt: np.array, disrupt time for the shot in seconds where the
+                       first column is the shot number and the second column is
+                       the disrupt time (in seconds)
         """
         t_b = time.time()
         # Construct channel save paths.
@@ -2818,7 +2828,9 @@ class ECEI:
             os.environ["NUMEXPR_NUM_THREADS"] = "1"
             os.environ["OMP_NUM_THREADS"] = "1"
             Download_Shot_List_toksearch(shot_numbers, channels, save_path,\
-                    d_sample = d_sample, verbose = verbose)
+                    d_sample = d_sample, verbose = verbose, rm_spikes = rm_spikes,\
+                    felipe_format = felipe_format, t_end = t_end,\
+                    t_disrupt = t_disrupt)
         else:
             try:
                 print("Connecting to MDSplus...")

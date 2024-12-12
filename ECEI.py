@@ -1090,11 +1090,13 @@ def Download_Shot_List(shot_numbers, channel_paths, max_cores = 8,\
 
 
 def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
-                                 verbose = False): 
+                                 verbose = False, rm_spikes = False,\
+                                 felipe_format = False, t_end = None,\
+                                 t_disrupt = None): 
     # Initialize the toksearch pipeline
     pipe = ts.Pipeline(shots)
 
-    # Fetch signals for these 32 channels
+    # Fetch signals for these channels
     for channel in channels:
         try:
             pipe.fetch(channel[1:-1], ts.PtDataSignal(channel[1:-1]))
@@ -1107,44 +1109,141 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
         # Get the shot ID from the record
         shot_id = rec['shot']
         if np.random.uniform() < 1/100:
-            print(f"Working on shot {shot_id}. This job runs from {shots[0]}-{shots[len(shots)-1]}.")
+            print(f"Working on shot {shot_id}. This job runs from {shots[0]}-"\
+                  f"{shots[len(shots)-1]}.")
         hdf5_path = savepath+f'/{shot_id}.hdf5'
-        for channel in channels:
-            with h5py.File(hdf5_path, 'a') as f:  # 'a' for append mode
-                if channel not in f:
-                    try:
+
+        if felipe_format:
+            # Get t_end and t_disrupt for this shot
+            t_end_val = 0 if t_end is None else t_end[np.where(\
+                    t_end[:,0]==shot_id)[0][0], 1]
+            t_disrupt_val = 0 if t_disrupt is None else t_disrupt[np.where(\
+                    t_disrupt[:,0]==shot_id)[0][0], 1]
+            
+            with h5py.File(hdf5_path, 'w') as f:
+                create_felipe_structure(f, t_disrupt_val)
+                # Initialize arrays for Felipe format
+                time_entered = False
+                means = np.zeros((20,8))
+                stds = np.zeros((20,8))
+                
+                # Get first valid channel to determine array dimensions
+                for channel in channels:
+                    if rec[channel[1:-1]] is not None:
                         data = rec[channel[1:-1]]['data']
-                        time = rec[channel[1:-1]]['times']
-                        fs_start = 1/(time[1]-time[0])
+                        time = rec[channel[1:-1]]['times']/1000
                         if d_sample >= 10:
+                            fs_start = 1/(time[1]-time[0])
                             n = int(math.log10(d_sample))
                             for _ in range(n):
-                                data, time = downsample_signal(data, fs_start, 10, time)
+                                data, time = downsample_signal(data, fs_start,\
+                                        10, time)
                                 fs_start = fs_start/10
                         else:
-                            data, time = downsample_signal(data, fs_start, d_sample, time)
+                            data, time = downsample_signal(data, fs_start,\
+                                    d_sample, time)
+                        array = np.zeros((time.shape[0], 20, 8))
+                        break
+
+                # Process each channel
+                for channel in channels:
+                    XX = int(channel[-5:-3])-3
+                    YY = int(channel[-3:-1])-1
+                    
+                    try:
+                        if rec[channel[1:-1]] is not None:
+                            data = rec[channel[1:-1]]['data']
+                            time = rec[channel[1:-1]]['times']
+                            fs_start = 1000/(time[1]-time[0])
+                            
+                            if d_sample >= 10:
+                                n = int(math.log10(d_sample))
+                                for _ in range(n):
+                                    data, time = downsample_signal(data,\
+                                            fs_start, 10, time)
+                                    fs_start = fs_start/10
+                            else:
+                                data, time = downsample_signal(data, fs_start,\
+                                        d_sample, time)
+                                
+                            if rm_spikes:
+                                remove_spikes_custom_Z(data, dt = (time[1]-time[0])/1000,\
+                                                        threshold = 3, window = 50)
+                                
+                            # Store in array
+                            array[:,XX,YY] = data
+                            means[XX,YY] = np.mean(data)
+                            stds[XX,YY] = np.std(data)
+                            
+                            if not time_entered:
+                                f['2D']['ecei'].create_dataset('freq',\
+                                        data=int(round(1/\
+                                        (time[1]-time[0])*1000)))
+                                time_entered = True
+                        else:
+                            array[:,XX,YY] = 0
+                            means[XX,YY] = 0
+                            stds[XX,YY] = 0
+                            
                     except Exception as e:
                         if verbose:
-                            print(f"An error occurred in channel {channel}, shot {shot_id}: {e}")
+                            print(f"Error processing channel {channel}, "\
+                                  f"shot {shot_id}: {e}")
+                        array[:,XX,YY] = 0
+                        means[XX,YY] = 0
+                        stds[XX,YY] = 0
 
-                    # Save channel-specific data
-                    if rec[channel[1:-1]] is None:
-                        f.create_dataset('missing_'+channel, data = np.array([-1.0]))
+                # Save arrays
+                f['2D']['ecei'].create_dataset('channel_means', data=means)
+                f['2D']['ecei'].create_dataset('channel_stds', data=stds)
+                f['2D']['ecei'].create_dataset('signal', data=array)
+                
+        else:
+            with h5py.File(hdf5_path, 'a') as f:
+                for channel in channels:
+                    if channel not in f:
+                        try:
+                            data = rec[channel[1:-1]]['data']
+                            time = rec[channel[1:-1]]['times']
+                            fs_start = 1/(time[1]-time[0])
+                            
+                            if d_sample >= 10:
+                                n = int(math.log10(d_sample))
+                                for _ in range(n):
+                                    data, time = downsample_signal(data,\
+                                            fs_start, 10, time)
+                                    fs_start = fs_start/10
+                            else:
+                                data, time = downsample_signal(data, fs_start,\
+                                        d_sample, time)
+                                
+                            if rm_spikes:
+                                remove_spikes_custom_Z(data)
+                                
+                        except Exception as e:
+                            if verbose:
+                                print(f"Error in channel {channel}, "\
+                                      f"shot {shot_id}: {e}")
+
+                        # Save channel-specific data
+                        if rec[channel[1:-1]] is None:
+                            f.create_dataset('missing_'+channel,\
+                                    data = np.array([-1.0]))
+                        else:
+                            f.create_dataset(channel, data=data)
+                            # Save single time series database
+                            if 'time' not in f:
+                                f.create_dataset('time', data=time)
                     else:
-                        f.create_dataset(channel, data=data)
-                        # Save single time series database
-                        if 'time' not in f:
-                            f.create_dataset('time', data=time)
-                else:
-                    if verbose:
-                        print('Channel {}, shot {} '.format(channel[-5:-1],\
-                            int(shot_id)),'has already been downloaded.')
+                        if verbose:
+                            print('Channel {}, shot {} '.format(channel[-5:-1],\
+                                int(shot_id)),'has already been downloaded.')
 
                 f.flush()
     
     # Discard data from pipeline
     pipe.keep([])
-
+    
     # Fetch data, limiting to 10GB per shot as per collaborator's advice
     #results = list(pipe.compute_serial())
     #results = list(pipe.compute_spark())

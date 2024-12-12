@@ -372,8 +372,8 @@ def create_felipe_structure(h5_file, t_disrupt):
     h5_file.create_group('0D')
     h5_file.create_group('1D')
     h5_file.create_group('2D')
-    h5_file.create_dataset('t_disrupt', data = t_disrupt)
-    h5_file.create_dataset('t_start', data = 0.0)
+    h5_file.create_dataset('t_disrupt', data = t_disrupt) # sec
+    h5_file.create_dataset('t_start', data = -50.0) # ms
     h5_file['2D'].create_group('ecei')
 
 
@@ -1116,7 +1116,17 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
         if felipe_format:
             # Get t_end and t_disrupt for this shot
             t_end_val = 0 if t_end is None else t_end[np.where(\
-                    t_end[:,0]==shot_id)[0][0], 1]
+                    t_end[:,0]==shot_id)[0][0], 1]*1000
+            if t_end is not None:
+                t_end_idx = np.where(t_end[:,0]==shot_id)[0]
+                if len(t_end_idx) > 0:
+                    t_end_val = 1000*t_end[t_end_idx[0], 1] # convert to ms
+                    if t_end_val <= 0:
+                        t_end_val = np.inf
+                else:
+                    t_end_val = np.inf
+            else:
+                t_end_val = np.inf
             t_disrupt_val = 0 if t_disrupt is None else t_disrupt[np.where(\
                     t_disrupt[:,0]==shot_id)[0][0], 1]
             
@@ -1131,9 +1141,15 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
                 for channel in channels:
                     if rec[channel[1:-1]] is not None:
                         data = rec[channel[1:-1]]['data']
-                        time = rec[channel[1:-1]]['times']/1000
+                        time = rec[channel[1:-1]]['times']
+
+                        # Filter by t_end before any processing
+                        valid_idx = np.where(time <= t_end_val)[0]
+                        data = data[valid_idx]
+                        time = time[valid_idx]
+                        fs_start = 1000/(time[1]-time[0])
+
                         if d_sample >= 10:
-                            fs_start = 1/(time[1]-time[0])
                             n = int(math.log10(d_sample))
                             for _ in range(n):
                                 data, time = downsample_signal(data, fs_start,\
@@ -1152,8 +1168,8 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
                     
                     try:
                         if rec[channel[1:-1]] is not None:
-                            data = rec[channel[1:-1]]['data']
-                            time = rec[channel[1:-1]]['times']
+                            data = rec[channel[1:-1]]['data'][valid_idx]
+                            time = rec[channel[1:-1]]['times'][valid_idx]
                             fs_start = 1000/(time[1]-time[0])
                             
                             if d_sample >= 10:
@@ -1177,8 +1193,7 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
                             
                             if not time_entered:
                                 f['2D']['ecei'].create_dataset('freq',\
-                                        data=int(round(1/\
-                                        (time[1]-time[0])*1000)))
+                                        data=int(round(1000/(time[1]-time[0]))))
                                 time_entered = True
                         else:
                             array[:,XX,YY] = 0
@@ -1243,7 +1258,7 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
     
     # Discard data from pipeline
     pipe.keep([])
-    
+
     # Fetch data, limiting to 10GB per shot as per collaborator's advice
     #results = list(pipe.compute_serial())
     #results = list(pipe.compute_spark())

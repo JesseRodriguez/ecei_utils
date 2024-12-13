@@ -59,6 +59,8 @@ def downsample_signal(signal, orig_sample_rate, decimation_factor,\
     Returns:
     numpy.arrays: The downsampled signal and time series
     """
+    if decimation_factor == 1:
+        return signal, time
     if decimation_factor <= 10:
         filtered_signal = filter_signal(signal, orig_sample_rate,\
                 decimation_factor)

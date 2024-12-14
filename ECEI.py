@@ -361,6 +361,8 @@ def remove_spikes_custom_Z(data, dt=1/100000, threshold=3, window=50):
             var = var_old + mean_old**2 - mean**2 + ((data[I-1]-shift)**2\
                   -(data[I-window]-shift)**2)/window
 
+        var = max(var, 0)
+
 
         Z = np.abs(data[I] - shift - mean)/(var**0.5 + 1e-8)
         if Z > threshold:
@@ -1110,15 +1112,19 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
     def process_and_save(rec):
         # Get the shot ID from the record
         shot_id = rec['shot']
-        if np.random.uniform() < 1/100:
+        report = False
+        if np.random.uniform() < 1/20:
             print(f"Working on shot {shot_id}. This job runs from {shots[0]}-"\
                   f"{shots[len(shots)-1]}.")
+            report = True
         hdf5_path = savepath+f'/{shot_id}.hdf5'
 
         if felipe_format:
+            #print("felipe format!")
             # Get t_end and t_disrupt for this shot
-            t_end_val = 0 if t_end is None else t_end[np.where(\
-                    t_end[:,0]==shot_id)[0][0], 1]*1000
+            #t_end_val = 0 if t_end is None else t_end[np.where(\
+            #        t_end[:,0]==shot_id)[0][0], 1]*1000
+            #print("t_end:", t_end_val)
             if t_end is not None:
                 t_end_idx = np.where(t_end[:,0]==shot_id)[0]
                 if len(t_end_idx) > 0:
@@ -1129,9 +1135,13 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
                     t_end_val = np.inf
             else:
                 t_end_val = np.inf
+            #print("t_end:", t_end_val)
             t_disrupt_val = 0 if t_disrupt is None else t_disrupt[np.where(\
                     t_disrupt[:,0]==shot_id)[0][0], 1]
-            
+            #print("got t_disrupt") 
+            #print("t_end:", t_end_val)
+            #print("t_disrupt:", t_disrupt_val)
+
             with h5py.File(hdf5_path, 'w') as f:
                 create_felipe_structure(f, t_disrupt_val)
                 # Initialize arrays for Felipe format
@@ -1164,6 +1174,7 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
                         break
 
                 # Process each channel
+                #print("Got array shape")
                 for channel in channels:
                     XX = int(channel[-5:-3])-3
                     YY = int(channel[-3:-1])-1
@@ -1183,10 +1194,12 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
                             else:
                                 data, time = downsample_signal(data, fs_start,\
                                         d_sample, time)
+                            #print("ran dsample func")
                                 
                             if rm_spikes:
                                 remove_spikes_custom_Z(data, dt = (time[1]-time[0])/1000,\
                                                         threshold = 3, window = 50)
+                            #print("removed spikes in:",XX,YY)
                                 
                             # Store in array
                             array[:,XX,YY] = data
@@ -1214,6 +1227,9 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
                 f['2D']['ecei'].create_dataset('channel_means', data=means)
                 f['2D']['ecei'].create_dataset('channel_stds', data=stds)
                 f['2D']['ecei'].create_dataset('signal', data=array)
+
+                if report:
+                    print(f"Successfully saved {shot_id}.")
                 
         else:
             with h5py.File(hdf5_path, 'a') as f:
@@ -1264,7 +1280,7 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
     # Fetch data, limiting to 10GB per shot as per collaborator's advice
     #results = list(pipe.compute_serial())
     #results = list(pipe.compute_spark())
-    pipe.compute_ray(memory_per_shot=int(1.1*(10e9)))
+    pipe.compute_ray(memory_per_shot=int(1.5*(10e9)))
 
 
 def Count_Missing(shot_list, shot_path, missing_path):

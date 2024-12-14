@@ -248,6 +248,11 @@ def get_t_end_file(filename, data_dir):
 def myclip(data, low, high):
     """
     Dumb clip for plotting purposes
+
+    Args:
+        data: numpy array, the data to clip
+        low: float, the lower bound for clipping
+        high: float, the upper bound for clipping
     """
     clipped_data = np.zeros_like(data)
     for i in range(data.shape[0]):
@@ -363,7 +368,6 @@ def remove_spikes_custom_Z(data, dt=1/100000, threshold=3, window=50):
 
         var = max(var, 0)
 
-
         Z = np.abs(data[I] - shift - mean)/(var**0.5 + 1e-8)
         if Z > threshold:
             data[I] = data[I-1]
@@ -386,6 +390,14 @@ def convert_file_felipe_style(filename, data_dir, save_dir, t_end, t_disrupt,\
     """
     Convert old-school ECEI raw data file to format that is compatible with 
     Felipe's loader
+
+    Args:
+        filename: str, name of the file to convert
+        data_dir: str, directory containing the file to convert
+        save_dir: str, directory to save the converted file
+        t_end: float, end time for the shot in seconds
+        t_disrupt: float, disrupt time for the shot in seconds
+        channels: list, list of channels to convert
     """
     if np.random.uniform() < 1/25:
         print("Converting "+filename)
@@ -1114,17 +1126,16 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
         shot_id = rec['shot']
         report = False
         if np.random.uniform() < 1/20:
+        report  = False
+        if np.random.uniform() < 1/20:
             print(f"Working on shot {shot_id}. This job runs from {shots[0]}-"\
                   f"{shots[len(shots)-1]}.")
+            report = True
             report = True
         hdf5_path = savepath+f'/{shot_id}.hdf5'
 
         if felipe_format:
-            #print("felipe format!")
             # Get t_end and t_disrupt for this shot
-            #t_end_val = 0 if t_end is None else t_end[np.where(\
-            #        t_end[:,0]==shot_id)[0][0], 1]*1000
-            #print("t_end:", t_end_val)
             if t_end is not None:
                 t_end_idx = np.where(t_end[:,0]==shot_id)[0]
                 if len(t_end_idx) > 0:
@@ -1135,7 +1146,7 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
                     t_end_val = np.inf
             else:
                 t_end_val = np.inf
-            #print("t_end:", t_end_val)
+
             t_disrupt_val = 0 if t_disrupt is None else t_disrupt[np.where(\
                     t_disrupt[:,0]==shot_id)[0][0], 1]
             #print("got t_disrupt") 

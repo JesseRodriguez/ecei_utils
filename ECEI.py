@@ -1126,13 +1126,48 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
         shot_id = rec['shot']
         report = False
         if np.random.uniform() < 1/20:
-        report  = False
-        if np.random.uniform() < 1/20:
             print(f"Working on shot {shot_id}. This job runs from {shots[0]}-"\
                   f"{shots[len(shots)-1]}.")
             report = True
-            report = True
+
         hdf5_path = savepath+f'/{shot_id}.hdf5'
+
+        # Check if file exists and is properly populated
+        try:
+            if os.path.exists(hdf5_path):
+                with h5py.File(hdf5_path, 'r') as f:
+                    if felipe_format:
+                        # Check for required datasets in Felipe format
+                        if '2D' in f and 'ecei' in f['2D'] and\
+                           'signal' in f['2D']['ecei']:
+                            sig_array = f['2D']['ecei']['signal']
+                            if sig_array.shape[1:] == (20, 8):
+                                if verbose:
+                                    print(f"Shot {shot_id} already exists with "\
+                                          "proper Felipe format.")
+                                return
+                    else:
+                        # Check for at least some valid channels in regular format
+                        valid_channels = 0
+                        for channel in channels:
+                            if channel in f:
+                                valid_channels += 1
+                        if valid_channels > 0:
+                            if verbose:
+                                print(f"Shot {shot_id} already exists with "\
+                                      f"{valid_channels} channels.")
+                            return
+                
+                if verbose:
+                    print(f"File exists for shot {shot_id} but appears corrupt "\
+                          "or incomplete. Redownloading...")
+                os.remove(hdf5_path)
+                
+        except Exception as e:
+            print(f"Error checking existing file for shot {shot_id}: {e}")
+            if os.path.exists(hdf5_path):
+                os.remove(hdf5_path)
+                process_and_save(rec)
 
         if felipe_format:
             # Get t_end and t_disrupt for this shot
@@ -1149,9 +1184,6 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
 
             t_disrupt_val = 0 if t_disrupt is None else t_disrupt[np.where(\
                     t_disrupt[:,0]==shot_id)[0][0], 1]
-            #print("got t_disrupt") 
-            #print("t_end:", t_end_val)
-            #print("t_disrupt:", t_disrupt_val)
 
             with h5py.File(hdf5_path, 'w') as f:
                 create_felipe_structure(f, t_disrupt_val)
@@ -1185,7 +1217,6 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
                         break
 
                 # Process each channel
-                #print("Got array shape")
                 for channel in channels:
                     XX = int(channel[-5:-3])-3
                     YY = int(channel[-3:-1])-1
@@ -1205,12 +1236,10 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
                             else:
                                 data, time = downsample_signal(data, fs_start,\
                                         d_sample, time)
-                            #print("ran dsample func")
                                 
                             if rm_spikes:
                                 remove_spikes_custom_Z(data, dt = (time[1]-time[0])/1000,\
                                                         threshold = 3, window = 50)
-                            #print("removed spikes in:",XX,YY)
                                 
                             # Store in array
                             array[:,XX,YY] = data

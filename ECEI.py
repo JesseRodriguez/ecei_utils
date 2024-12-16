@@ -1125,7 +1125,7 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
         # Get the shot ID from the record
         shot_id = rec['shot']
         report = False
-        if np.random.uniform() < 1/20:
+        if np.random.uniform() < 1:
             print(f"Working on shot {shot_id}. This job runs from {shots[0]}-"\
                   f"{shots[len(shots)-1]}.")
             report = True
@@ -1162,6 +1162,7 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
                     print(f"File exists for shot {shot_id} but appears corrupt "\
                           "or incomplete. Redownloading...")
                 os.remove(hdf5_path)
+                process_and_save(rec)
                 
         except Exception as e:
             print(f"Error checking existing file for shot {shot_id}: {e}")
@@ -1267,6 +1268,8 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
                 f['2D']['ecei'].create_dataset('channel_means', data=means)
                 f['2D']['ecei'].create_dataset('channel_stds', data=stds)
                 f['2D']['ecei'].create_dataset('signal', data=array)
+
+                f.flush()
 
                 if report:
                     print(f"Successfully saved {shot_id}.")

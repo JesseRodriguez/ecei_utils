@@ -1326,6 +1326,174 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
     pipe.compute_ray(memory_per_shot=int(1.5*(10e9)))
 
 
+def Download_Shot_List_toksearch_by_channel(shots, channels, savepath, d_sample = 1,\
+                                 verbose = False, rm_spikes = False,\
+                                 felipe_format = False, t_end = None,\
+                                 t_disrupt = None): 
+    # Initialize the toksearch pipeline
+    pipe = ts.Pipeline(shots)
+
+    # Function to process and write to HDF5
+    @pipe.map
+    def process_and_save(rec):
+        # Get the shot ID from the record
+        shot_id = rec['shot']
+        report = False
+        if np.random.uniform() < 1/20:
+            print(f"Working on shot {shot_id}. This job runs from {shots[0]}-"\
+                  f"{shots[len(shots)-1]}.")
+            report = True
+        hdf5_path = savepath+f'/{shot_id}.hdf5'
+
+        # Check if file exists and is properly populated
+        try:
+            if os.path.exists(hdf5_path):
+                with h5py.File(hdf5_path, 'r') as f:
+                    if felipe_format:
+                        # Check for required datasets in Felipe format
+                        if '2D' in f and 'ecei' in f['2D'] and\
+                           'signal' in f['2D']['ecei']:
+                            sig_array = f['2D']['ecei']['signal']
+                            if sig_array.shape[1:] == (20, 8):
+                                # Check that less than half channels are zeros
+                                zero_channels = 0
+                                for i in range(20):
+                                    for j in range(8):
+                                        if np.all(sig_array[:,i,j] == 0):
+                                            zero_channels += 1
+                                if zero_channels < 80:  # Less than half channels
+                                    if verbose:
+                                        print(f"Shot {shot_id} already exists with "\
+                                              "proper Felipe format.")
+                                    return
+                    else:
+                        # Check for at least some valid channels in regular format
+                        valid_channels = 0
+                        for channel in channels:
+                            if channel in f and not np.all(f[channel][:] == 0):
+                                valid_channels += 1
+                        if valid_channels > len(channels)/2:  # More than half valid
+                            if verbose:
+                                print(f"Shot {shot_id} already exists with "\
+                                      f"{valid_channels} channels.")
+                            return
+                
+                if verbose:
+                    print(f"File exists for shot {shot_id} but appears corrupt "\
+                          "or incomplete. Redownloading...")
+                os.remove(hdf5_path)
+                process_and_save(rec)
+                
+        except Exception as e:
+            if verbose:
+                print(f"Error checking existing file for shot {shot_id}: {e}")
+            if os.path.exists(hdf5_path):
+                os.remove(hdf5_path)
+
+        # Get t_end value for this shot
+        if t_end is not None:
+            t_end_idx = np.where(t_end[:,0]==shot_id)[0]
+            if len(t_end_idx) > 0:
+                t_end_val = t_end[t_end_idx[0], 1]
+                if t_end_val <= 0:
+                    t_end_val = np.inf
+            else:
+                t_end_val = np.inf
+        else:
+            t_end_val = np.inf
+
+        # Initialize file structure
+        if felipe_format:
+            t_disrupt_val = 0 if t_disrupt is None else t_disrupt[np.where(\
+                    t_disrupt[:,0]==shot_id)[0][0], 1]
+            
+            with h5py.File(hdf5_path, 'w') as f:
+                create_felipe_structure(f, t_disrupt_val)
+                f['2D']['ecei'].create_dataset('channel_means', data=np.zeros((20,8)))
+                f['2D']['ecei'].create_dataset('channel_stds', data=np.zeros((20,8)))
+
+        # Process one channel at a time
+        array_shape = None
+        for channel in channels:
+            try:
+                # Fetch single channel
+                pipe.fetch(channel[1:-1], ts.PtDataSignal(channel[1:-1]))
+                
+                if rec[channel[1:-1]] is not None:
+                    data = rec[channel[1:-1]]['data']
+                    time = rec[channel[1:-1]]['times']
+                    
+                    # Filter by t_end before any processing
+                    valid_idx = np.where(time <= t_end_val*1000)[0]
+                    data = data[valid_idx]
+                    time = time[valid_idx]
+                    
+                    # Initialize array shape if first valid channel
+                    if array_shape is None and felipe_format:
+                        array_shape = time.shape[0]
+                        with h5py.File(hdf5_path, 'r+') as f:
+                            f['2D']['ecei'].create_dataset('signal',\
+                                    data=np.zeros((array_shape, 20, 8)))
+                            f['2D']['ecei'].create_dataset('freq',\
+                                    data=int(round(1000/(time[1]-time[0]))))
+                    
+                    # Process data
+                    fs_start = 1000/(time[1]-time[0])
+                    if d_sample >= 10:
+                        n = int(math.log10(d_sample))
+                        for _ in range(n):
+                            data, time = downsample_signal(data, fs_start, 10, time)
+                            fs_start = fs_start/10
+                    else:
+                        data, time = downsample_signal(data, fs_start, d_sample, time)
+                    
+                    if rm_spikes:
+                        remove_spikes_custom_Z(data, dt=(time[1]-time[0])/1000,\
+                                threshold=3, window=50)
+                    
+                    # Save processed channel
+                    XX = int(channel[-5:-3])-3
+                    YY = int(channel[-3:-1])-1
+                    
+                    if felipe_format:
+                        with h5py.File(hdf5_path, 'r+') as f:
+                            f['2D']['ecei']['signal'][:,XX,YY] = data
+                            f['2D']['ecei']['channel_means'][XX,YY] = np.mean(data)
+                            f['2D']['ecei']['channel_stds'][XX,YY] = np.std(data)
+                    else:
+                        with h5py.File(hdf5_path, 'a') as f:
+                            f.create_dataset(channel, data=data)
+                            if 'time' not in f:
+                                f.create_dataset('time', data=time)
+                
+                else:  # Channel data is None
+                    if not felipe_format:
+                        with h5py.File(hdf5_path, 'a') as f:
+                            f.create_dataset('missing_'+channel,\
+                                    data=np.array([-1.0]))
+                
+                # Clear channel from pipeline
+                pipe.keep([])
+
+            except Exception as e:
+                if verbose:
+                    print(f"Error processing channel {channel}, shot {shot_id}: {e}")
+                if felipe_format and array_shape is not None:
+                    XX = int(channel[-5:-3])-3
+                    YY = int(channel[-3:-1])-1
+                    with h5py.File(hdf5_path, 'r+') as f:
+                        f['2D']['ecei']['signal'][:,XX,YY] = 0
+                        f['2D']['ecei']['channel_means'][XX,YY] = 0
+                        f['2D']['ecei']['channel_stds'][XX,YY] = 0
+
+        if report:
+          print(f"Successfully saved {shot_id}.")
+                
+
+    # Fetch data, limiting to 10GB per shot as per collaborator's advice
+    pipe.compute_ray(memory_per_shot=int(1.5*(10e9)))
+
+
 def Count_Missing(shot_list, shot_path, missing_path):
     """
     Accepts a shot list and a path to the shot files and produces an up-to-date

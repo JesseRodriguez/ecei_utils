@@ -1339,7 +1339,7 @@ def Download_Shot_List_toksearch_by_channel(shots, channels, savepath, d_sample 
         # Get the shot ID from the record
         shot_id = rec['shot']
         report = False
-        if np.random.uniform() < 1/20:
+        if np.random.uniform() < 1/10:
             print(f"Working on shot {shot_id}. This job runs from {shots[0]}-"\
                   f"{shots[len(shots)-1]}.")
             report = True
@@ -1348,19 +1348,28 @@ def Download_Shot_List_toksearch_by_channel(shots, channels, savepath, d_sample 
         # Check if file exists and is properly populated
         try:
             if os.path.exists(hdf5_path):
+                if verbose:
+                    print(f"Checking if {shot_id} already exists...")
                 with h5py.File(hdf5_path, 'r') as f:
                     if felipe_format:
                         # Check for required datasets in Felipe format
                         if '2D' in f and 'ecei' in f['2D'] and\
                            'signal' in f['2D']['ecei']:
+                            if verbose:
+                                print(f"structure appears to be in place for {shot_id}.")
                             sig_array = f['2D']['ecei']['signal']
                             if sig_array.shape[1:] == (20, 8):
                                 # Check that less than half channels are zeros
+                                if verbose:
+                                    print(f"Checking for zero channels in {shot_id}.")
                                 zero_channels = 0
                                 for i in range(20):
                                     for j in range(8):
                                         if np.all(sig_array[:,i,j] == 0):
                                             zero_channels += 1
+                                        else:
+                                            if verbose:
+                                                print(f"channel {i},{j} NOT zero.")
                                 if zero_channels < 80:  # Less than half channels
                                     if verbose:
                                         print(f"Shot {shot_id} already exists with "\
@@ -1413,6 +1422,8 @@ def Download_Shot_List_toksearch_by_channel(shots, channels, savepath, d_sample 
                 f['2D']['ecei'].create_dataset('channel_stds', data=np.zeros((20,8)))
 
         # Process one channel at a time
+        if report:
+            print(f"Setup felipe structure for {shot_id}. Starting to loop channels.")
         array_shape = None
         for channel in channels:
             try:
@@ -1491,7 +1502,7 @@ def Download_Shot_List_toksearch_by_channel(shots, channels, savepath, d_sample 
                 
 
     # Fetch data, limiting to 10GB per shot as per collaborator's advice
-    pipe.compute_ray(memory_per_shot=int(1.5*(10e9)))
+    pipe.compute_ray(memory_per_shot=int(0.2*(10e9)))
 
 
 def Count_Missing(shot_list, shot_path, missing_path):

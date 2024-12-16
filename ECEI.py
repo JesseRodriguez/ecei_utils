@@ -1363,13 +1363,16 @@ def Download_Shot_List_toksearch_by_channel(shots, channels, savepath, d_sample 
                                 if verbose:
                                     print(f"Checking for zero channels in {shot_id}.")
                                 zero_channels = 0
+                                n_samples = 100  # Number of random points to check
                                 for i in range(20):
                                     for j in range(8):
-                                        if np.all(sig_array[:,i,j] == 0):
+                                        rand_idx = np.random.randint(0,\
+                                                sig_array.shape[0], n_samples)
+                                        if np.all(sig_array[rand_idx,i,j] == 0):
                                             zero_channels += 1
                                         else:
                                             if verbose:
-                                                print(f"channel {i},{j} NOT zero.")
+                                                print(f"shot {shot_id}, channel {i},{j} NOT zero.")
                                 if zero_channels < 80:  # Less than half channels
                                     if verbose:
                                         print(f"Shot {shot_id} already exists with "\

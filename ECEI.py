@@ -3056,7 +3056,7 @@ class ECEI:
             os.environ["MKL_NUM_THREADS"] = "1"
             os.environ["NUMEXPR_NUM_THREADS"] = "1"
             os.environ["OMP_NUM_THREADS"] = "1"
-            Download_Shot_List_toksearch(shot_numbers, channels, save_path,\
+            Download_Shot_List_toksearch_by_channel(shot_numbers, channels, save_path,\
                     d_sample = d_sample, verbose = verbose, rm_spikes = rm_spikes,\
                     felipe_format = felipe_format, t_end = t_end,\
                     t_disrupt = t_disrupt)

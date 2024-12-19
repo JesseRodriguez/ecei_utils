@@ -1363,7 +1363,7 @@ def Download_Shot_List_toksearch_by_channel(shots, channels, savepath, d_sample 
         def process_and_save(rec):
             shot_id = rec['shot']
             report = False
-            if verbose or np.random.uniform() < 1:#/20:
+            if verbose or np.random.uniform() < 1/48:
                 print(f"Working on shot {shot_id}, batch {batch_idx + 1}/{len(channel_batches)}")
                 print(f"Channels: {channel_batch[0]} to {channel_batch[-1]}")
                 report = True
@@ -1371,7 +1371,7 @@ def Download_Shot_List_toksearch_by_channel(shots, channels, savepath, d_sample 
             hdf5_path = os.path.join(savepath, f'{shot_id}.hdf5') 
 
             if not Check_Channels(hdf5_path, channel_batch, shot_id, felipe_format, verbose, report):
-                process_and_save(rec)
+                pass
             else:
                 return
 
@@ -1439,7 +1439,7 @@ def Download_Shot_List_toksearch_by_channel(shots, channels, savepath, d_sample 
                             print(f"Successfully removed spikes for shot {shot_id}, channel {channel}")
 
                         # Now take only the valid indices where time is between 0 and t_end_val
-                        valid_idx = np.where(0.0 <= time <= t_end_val*1000)[0]
+                        valid_idx = np.where((time >= 0.0) & (time <= t_end_val*1000))[0]
                         time = time[valid_idx]
                         data = data[valid_idx]
 
@@ -1510,7 +1510,8 @@ def Download_Shot_List_toksearch_by_channel(shots, channels, savepath, d_sample 
                 print(f"Finished batch {batch_idx + 1} for shot {shot_id}")
 
         # Fetch data for this batch with limited memory per shot
-        pipe.compute_ray(memory_per_shot=int(1.4*(1e9)))
+        for _ in pipe.compute_ray(memory_per_shot=int(1.5*(1e9))):
+            pass
 
 
 def Check_Channels(hdf5_path, channels, shot_id, felipe_format, verbose = False, report = False):
@@ -1545,24 +1546,31 @@ def Check_Channels(hdf5_path, channels, shot_id, felipe_format, verbose = False,
                             zero_channels = 0
                             n_samples = 10  # Number of random points to check
                             dset = f['2D']['ecei']['signal']  # Get dataset reference
-                            for i in range(20):
-                                for j in range(8):
-                                    rand_idx = np.sort(np.random.randint(0,\
+                            for channel in channels:
+                                XX = int(channel[-5:-3])-3
+                                YY = int(channel[-3:-1])-1
+                                rand_idx = np.sort(np.random.randint(0,\
                                             sig_shape[0], n_samples))
-                                    # Load only the specific indices we need
-                                    sample_data = dset[rand_idx, i, j]
-                                    if np.all(sample_data == 0):
-                                        zero_channels += 1
-                                    else:
-                                        if verbose:
-                                            print(f"shot {shot_id}, channel {i},{j} NOT zero.")
-                                    del sample_data  # Clear memory immediately
+                                # Load only the specific indices we need
+                                sample_data = dset[rand_idx, XX, YY]
+                                if np.all(sample_data == 0):
+                                    zero_channels += 1
+                                else:
+                                    if verbose:
+                                        print(f"shot {shot_id}, channel {XX},{YY} NOT zero.")
+                                del sample_data  # Clear memory immediately
                                         
-                            if zero_channels < len(channels)/2:  # Less than half channels
+                            if zero_channels <= len(channels)/2:  # Less than half channels
                                 if verbose or report:
                                     print(f"Shot {shot_id} already exists with "\
                                           "proper Felipe format.")
                                 return True
+                            else: # Just too many zeroes but the structure is good, so don't remove file
+                                if verbose or report:
+                                    print(f"Shot {shot_id} already exists with "\
+                                          "proper Felipe format, but is missing too many channels."\
+                                          " Running fetch for these channels...")
+                                return False
                 else:
                     # Check for at least some valid channels in regular format
                     valid_channels = 0
@@ -1591,7 +1599,12 @@ def Check_Channels(hdf5_path, channels, shot_id, felipe_format, verbose = False,
                       "or incomplete. Redownloading...")
             os.remove(hdf5_path)
             return False
-                
+        
+        else: #Path does not exist
+            if verbose or report:
+                print(f"File does not exist for shot {shot_id}")
+            return False
+
     except Exception as e:
         if verbose or report:
             print(f"Error checking existing file for shot {shot_id}: {e}")

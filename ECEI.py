@@ -1125,7 +1125,7 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
         # Get the shot ID from the record
         shot_id = rec['shot']
         report = False
-        if np.random.uniform() < 1:
+        if np.random.uniform() < 1/20:
             print(f"Working on shot {shot_id}. This job runs from {shots[0]}-"\
                   f"{shots[len(shots)-1]}.")
             report = True
@@ -1170,19 +1170,19 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
                 os.remove(hdf5_path)
                 process_and_save(rec)
 
-        if felipe_format:
-            # Get t_end and t_disrupt for this shot
-            if t_end is not None:
-                t_end_idx = np.where(t_end[:,0]==shot_id)[0]
-                if len(t_end_idx) > 0:
-                    t_end_val = 1000*t_end[t_end_idx[0], 1] # convert to ms
-                    if t_end_val <= 0:
-                        t_end_val = np.inf
-                else:
+        # Get t_end and t_disrupt for this shot
+        if t_end is not None:
+            t_end_idx = np.where(t_end[:,0]==shot_id)[0]
+            if len(t_end_idx) > 0:
+                t_end_val = 1000*t_end[t_end_idx[0], 1] # convert to ms
+                if t_end_val <= 0:
                     t_end_val = np.inf
             else:
                 t_end_val = np.inf
+        else:
+            t_end_val = np.inf
 
+        if felipe_format:
             t_disrupt_val = 0 if t_disrupt is None else t_disrupt[np.where(\
                     t_disrupt[:,0]==shot_id)[0][0], 1]
 
@@ -1282,6 +1282,9 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
                             data = rec[channel[1:-1]]['data']
                             time = rec[channel[1:-1]]['times']
                             fs_start = 1/(time[1]-time[0])
+                            valid_idx = np.where(time <= t_end_val)[0]
+                            data = data[valid_idx]
+                            time = time[valid_idx]
                             
                             if d_sample >= 10:
                                 n = int(math.log10(d_sample))
@@ -1289,12 +1292,18 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
                                     data, time = downsample_signal(data,\
                                             fs_start, 10, time)
                                     fs_start = fs_start/10
+                            if d_sample == 1:
+                                pass
                             else:
                                 data, time = downsample_signal(data, fs_start,\
                                         d_sample, time)
                                 
                             if rm_spikes:
-                                remove_spikes_custom_Z(data)
+                                remove_spikes_custom_Z(data, dt = (time[1]-time[0])/1000,\
+                                                        threshold = 3, window = 50)
+                                valid_idx = np.where((time >= 0.0) & (time <= t_end_val*1000))[0]
+                                time = time[valid_idx]
+                                data = data[valid_idx]
                                 
                         except Exception as e:
                             if verbose:
@@ -1316,6 +1325,9 @@ def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
                                 int(shot_id)),'has already been downloaded.')
 
                 f.flush()
+
+            if report:
+                print(f"Successfully saved {shot_id}.")
     
     # Discard data from pipeline
     pipe.keep([])
@@ -1344,7 +1356,7 @@ def Download_Shot_List_toksearch_by_channel(shots, channels, savepath, d_sample 
         t_disrupt: Array of disruption times
     """
     # Process channels in batches of 8 to manage memory
-    batch_size = 8
+    batch_size = 4
     channel_batches = [channels[i:i + batch_size] for i in range(0, len(channels), batch_size)]
     
     for batch_idx, channel_batch in enumerate(channel_batches):

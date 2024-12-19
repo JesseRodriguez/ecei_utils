@@ -1625,6 +1625,163 @@ def Check_Channels(hdf5_path, channels, shot_id, felipe_format, verbose = False,
         return False
 
 
+def Download_By_Channel(shot_numbers, channels, save_path, d_sample=1, 
+        rm_spikes=False, verbose=False, t_end=None):
+    """
+    Downloads ECEI data one channel at a time using separate toksearch pipelines.
+    Creates channel subdirectories and saves individual .hdf5 files.
+    
+    Args:
+        shot_numbers: List/array of shot numbers to process
+        save_path: Base directory to save channel subdirectories
+        d_sample: Downsample factor (must be power of 10)
+        rm_spikes: Whether to remove spikes from signals
+        verbose: Whether to print detailed progress
+    """
+    if not tksrch:
+        raise ImportError("Toksearch is required for this function")
+
+    # Create channel directories
+    for channel in channels:
+        chan_dir = os.path.join(save_path, channel[1:-1])  # Remove quotes
+        os.makedirs(chan_dir, exist_ok=True)
+        
+    # Process one channel at a time
+    for channel in channels:
+        chan_name = channel[1:-1]  # Remove quotes
+        chan_dir = os.path.join(save_path, chan_name)
+        
+        if verbose:
+            print(f"\nProcessing channel {chan_name}...")
+            
+        # Initialize pipeline for this channel
+        pipe = ts.Pipeline(shot_numbers)
+        pipe.fetch(chan_name, ts.PtDataSignal(chan_name))
+        
+        @pipe.map
+        def process_and_save(rec):
+            shot_id = rec['shot']
+            
+            report = False
+            if np.random.uniform() < 1/20:
+                print(f"Working on shot {shot_id}, channel {chan_name}")
+                report = True
+                
+            hdf5_path = os.path.join(chan_dir, f'{shot_id}.hdf5')
+            
+            # Check if channel already exists
+            if Check_Channel(hdf5_path, chan_name, shot_id, verbose):
+                return
+                
+            if t_end is not None:
+                t_end_idx = np.where(t_end[:,0]==shot_id)[0]
+                if len(t_end_idx) > 0:
+                    t_end_val = t_end[t_end_idx[0], 1]
+                    if t_end_val <= 0:
+                        t_end_val = np.inf
+                else:
+                    t_end_val = np.inf
+            else:
+                t_end_val = np.inf
+
+            try:
+                if rec[chan_name] is not None:
+                    data = rec[chan_name]['data']
+                    time = rec[chan_name]['times']
+                    fs_start = 1000/(time[1]-time[0])
+
+                    valid_idx = np.where(time <= t_end_val*1000)[0]
+                    data = data[valid_idx]
+                    time = time[valid_idx]
+                    
+                    # Downsample if requested
+                    if d_sample >= 10:
+                        n = int(math.log10(d_sample))
+                        for _ in range(n):
+                            data, time = downsample_signal(data, fs_start, 10, 
+                                    time)
+                            fs_start = fs_start/10
+                    elif d_sample > 1:
+                        data, time = downsample_signal(data, fs_start, d_sample,
+                                time)
+                        
+                    # Remove spikes if requested
+                    if rm_spikes:
+                        remove_spikes_custom_Z(data, dt=(time[1]-time[0])/1000,
+                                threshold=3, window=50)
+                        final_idx = np.where((time >= 0.0) & (time <= t_end_val*1000))[0]
+                        data = data[final_idx]
+                        
+                    # Save to HDF5
+                    with h5py.File(hdf5_path, 'w') as f:
+                        f.create_dataset(chan_name, data=data)
+                        if report:
+                            print(f"Saved data for shot {shot_id}, channel {chan_name}")
+                        
+                else:  # Channel data is None
+                    with h5py.File(hdf5_path, 'w') as f:
+                        f.create_dataset(f'missing_{chan_name}', 
+                                data=np.array([-1.0]))
+                        if report:
+                            print(f"Saved missing data for shot {shot_id}, channel {chan_name}")
+                        
+            except Exception as e:
+                if verbose:
+                    print(f"Error processing shot {shot_id}, channel "
+                          f"{chan_name}: {e}")
+                try:
+                    with h5py.File(hdf5_path, 'w') as f:
+                        f.create_dataset(f'missing_{chan_name}', 
+                                data=np.array([-1.0]))
+                except Exception as e2:
+                    print(f"Could not save missing flag for shot {shot_id}, "
+                          f"channel {chan_name}: {e2}")
+                    
+        # Execute pipeline for this channel
+        pipe.keep([])  # Don't store results in memory
+        pipe.compute_ray(memory_per_shot=int(1*(1e9)))
+
+        del pipe
+
+
+def Check_Channel(hdf5_path, channel, shot_id, verbose=False):
+    """
+    Check if a specific channel for a shot already exists and has valid data.
+    
+    Args:
+        hdf5_path: Path to the HDF5 file
+        channel: Channel name to check
+        shot_id: Shot number to check
+        verbose: Whether to print detailed progress
+        
+    Returns:
+        bool: True if channel exists and has valid data, False otherwise
+    """
+    try:
+        if os.path.exists(hdf5_path):
+            with h5py.File(hdf5_path, 'r') as f:
+                if channel in f:
+                    # Get shape without loading data
+                    dset = f[channel]
+                    if dset.shape[0] > 0:  
+                        # Load small sample to check for zeros
+                        n_samples = min(100, dset.shape[0])
+                        rand_idx = np.sort(np.random.randint(0, dset.shape[0],
+                                n_samples))
+                        sample_data = dset[rand_idx]
+                        if not np.all(sample_data == 0):
+                            if verbose:
+                                print(f"Channel {channel} for shot {shot_id} "
+                                      "already exists.")
+                            return True
+                        
+    except Exception as e:
+        if verbose:
+            print(f"Error checking {channel} in shot {shot_id}: {e}")
+            
+    return False
+
+
 def Count_Missing(shot_list, shot_path, missing_path):
     """
     Accepts a shot list and a path to the shot files and produces an up-to-date
@@ -3140,7 +3297,7 @@ class ECEI:
                           chan_uplim = 22, d_sample = 1, try_again = False,\
                           tksrch = False, rm_spikes = False,\
                           felipe_format = False, t_end = None,\
-                         t_disrupt = None):
+                          t_disrupt = None, null_format = False):
         """
         Accepts a list of shot numbers and downloads the data. Returns nothing.
         Shots are saved in hdf5 format, downsampling is done BEFORE saving. 
@@ -3167,6 +3324,7 @@ class ECEI:
             t_disrupt: np.array, disrupt time for the shot in seconds where the
                        first column is the shot number and the second column is
                        the disrupt time (in seconds)
+            null_format: bool, tells script to save the data in the null format
         """
         t_b = time.time()
         # Construct channel save paths.
@@ -3187,7 +3345,12 @@ class ECEI:
             os.environ["MKL_NUM_THREADS"] = "1"
             os.environ["NUMEXPR_NUM_THREADS"] = "1"
             os.environ["OMP_NUM_THREADS"] = "1"
-            Download_Shot_List_toksearch_by_channel(shot_numbers, channels, save_path,\
+            if null_format:
+                Download_By_Channel(shot_numbers, channels, save_path,\
+                    d_sample = d_sample, verbose = verbose, rm_spikes = rm_spikes,\
+                    t_end = t_end)
+            else:   
+                Download_Shot_List_toksearch_by_channel(shot_numbers, channels, save_path,\
                     d_sample = d_sample, verbose = verbose, rm_spikes = rm_spikes,\
                     felipe_format = felipe_format, t_end = t_end,\
                     t_disrupt = t_disrupt)

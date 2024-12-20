@@ -1648,6 +1648,7 @@ def Download_By_Channel(shot_numbers, channels, save_path, d_sample=1,
         
     # Process one channel at a time
     for channel in channels:
+        T1 = time.time()
         chan_name = channel[1:-1]  # Remove quotes
         chan_dir = os.path.join(save_path, chan_name)
         
@@ -1740,6 +1741,8 @@ def Download_By_Channel(shot_numbers, channels, save_path, d_sample=1,
         # Execute pipeline for this channel
         pipe.keep([])  # Don't store results in memory
         pipe.compute_ray(memory_per_shot=int(1*(1e9)))
+        T2 = time.time()
+        print(f"Finished downloading channel {chan_name} in {T2-T1} seconds.")
 
         del pipe
 

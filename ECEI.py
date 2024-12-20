@@ -19,6 +19,7 @@ import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 import h5py
+import logging
 try:
     import scipy.signal
     from scipy.interpolate import interp1d
@@ -1647,6 +1648,7 @@ def Download_By_Channel(shot_numbers, channels, save_path, d_sample=1,
         os.makedirs(chan_dir, exist_ok=True)
         
     # Process one channel at a time
+    logging.basicConfig(level=logging.DEBUG)
     for channel in channels:
         T1 = time.time()
         chan_name = channel[1:-1]  # Remove quotes
@@ -1740,7 +1742,12 @@ def Download_By_Channel(shot_numbers, channels, save_path, d_sample=1,
                     
         # Execute pipeline for this channel
         pipe.keep([])  # Don't store results in memory
-        pipe.compute_ray(memory_per_shot=int(1*(1e9)))
+        try:
+            pipe.compute_ray(memory_per_shot=int(1*(1e9)),
+                             ray_kwargs={"temp_dir": "/tmp/ecei_temp",  # Explicit temp dir
+                                         "logging_level": logging.DEBUG})
+        except Exception as e:
+            print(f"Error computing ray: {e}")
         T2 = time.time()
         print(f"Finished downloading channel {chan_name} in {T2-T1} seconds.")
 

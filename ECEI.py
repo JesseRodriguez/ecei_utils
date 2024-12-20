@@ -1774,10 +1774,17 @@ def Check_Channel(hdf5_path, channel, shot_id, verbose=False):
                                 print(f"Channel {channel} for shot {shot_id} "
                                       "already exists.")
                             return True
+                    elif np.all(np.asarray(dset) == -1.0):
+                        if verbose:
+                            print(f"Channel {channel} for shot {shot_id} is missing.")
+                        return False
                         
     except Exception as e:
         if verbose:
             print(f"Error checking {channel} in shot {shot_id}: {e}")
+        if os.path.exists(hdf5_path):
+            os.remove(hdf5_path)
+        return False
             
     return False
 
